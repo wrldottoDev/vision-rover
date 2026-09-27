@@ -8602,3 +8602,686 @@ transform example (200, 460, 1.5707963267948966) after 20mm forward (200, 480)
 marker outer/black inner corner cells 39.5 40.5
 wheel circumference 103.67255756846318 wheel travel90 69.9004365423729
 
+exec
+/bin/zsh -c "python3 -c 'from pathlib import Path
+r=Path(\"_source/Rover Vision Artificial\")
+for f,a,b in [(\"Vision-Rover-Challenge-main_unz/Vision-Rover-Challenge-main/codigos/wifi_command_receiver.py\",45,73),(\"Vision-Rover-Challenge-main_unz/Vision-Rover-Challenge-main/vision-system/vision/sistema.py\",284,316),(\"03_Informe_Resultados/fuente/informe.tex\",1254,1284),(\"03_Informe_Resultados/fuente/informe.tex\",1324,1343),(\"04_Banco_Pruebas/simulador.py\",216,240),(\"04_Banco_Pruebas/salidas/run_n3.txt\",1,23),(\"Vision-Rover-Challenge-main_unz/Vision-Rover-Challenge-main/vision-system/contrato/CONTRATO.md\",430,463)]:
+ print(\"\\nFILE\",f)
+ for n,s in enumerate((r/f).read_text().splitlines(),1):
+  if a<=n<=b: print(f\"{n:4} {s}\")'
+rg -n 'INSUF|insuf|adelante|izquierda|angular|0.18|0.50|10.7|1.8' '_source/Rover Vision Artificial/Vision-Rover-Challenge-main_unz/Vision-Rover-Challenge-main/vision-system/vision/mediciones/desfases_rover10_20260809_2010.json' | tail -15
+rg --files '_source' | rg -i 'separad|\\.dxf"'$'"'" in /Users/ottogonzalez/Documents/rover/V1
+ succeeded in 0ms:
+
+FILE Vision-Rover-Challenge-main_unz/Vision-Rover-Challenge-main/codigos/wifi_command_receiver.py
+  45 
+  46 ib = IdeaBoard()
+  47 
+  48 
+  49 def stop():
+  50     """Detiene inmediatamente ambos motores."""
+  51     ib.motor_1.throttle = 0
+  52     ib.motor_2.throttle = 0
+  53     ib.pixel = (255, 0, 0)
+  54 
+  55 
+  56 def motor(left, right):
+  57     """
+  58     Controla directamente ambos motores.
+  59 
+  60     left  : -1.0 a 1.0
+  61     right : -1.0 a 1.0
+  62     """
+  63 
+  64     # Limitar los valores al rango permitido
+  65     left = max(-1.0, min(1.0, left))
+  66     right = max(-1.0, min(1.0, right))
+  67 
+  68     ib.motor_1.throttle = left
+  69     ib.motor_2.throttle = right
+  70 
+  71     ib.pixel = (0, 255, 0)
+  72 
+  73 
+
+FILE Vision-Rover-Challenge-main_unz/Vision-Rover-Challenge-main/vision-system/vision/sistema.py
+ 284             # ---- falla abierto -------------------------------------------
+ 285             # Si un cuadro no se puede procesar, NO se toca la casilla y se
+ 286             # sigue. La publicación continúa emitiendo el último estado bueno,
+ 287             # que envejece a la vista de todos. El sistema no se calla nunca.
+ 288             try:
+ 289                 sistema_actual, estado = procesar(
+ 290                     cuadro, cfg, matriz, arbitro.fase, seguidor, anclaje)
+ 291                 publicador.actualizar(estado)
+ 292                 ultimo_estado = estado
+ 293             except ErrorGeometria as exc:
+ 294                 fallos += 1
+ 295                 ultimo_error = str(exc).split(".")[0]
+ 296             except Exception as exc:  # noqa: BLE001 — a propósito: nada tumba la ronda
+ 297                 fallos += 1
+ 298                 ultimo_error = "{}: {}".format(type(exc).__name__, exc)
+ 299 
+ 300             # ---- la vista ------------------------------------------------
+ 301             if vista is not None and vista.toca_dibujar(time.monotonic()):
+ 302                 vista.dibujar(cuadro.imagen, sistema_actual, ultimo_estado, {
+ 303                     "fase": arbitro.fase, "sintetico": args.sintetico,
+ 304                     "clientes": publicador.clientes, "emitidos": publicador.emitidos,
+ 305                     "fps": fuente.fps_real, "fallos": fallos,
+ 306                     "esquinas_visibles": anclaje.esquinas_visibles,
+ 307                     "desvio_mm": anclaje.desvio_mm,
+ 308                 })
+ 309                 comando = vista.tecla()
+ 310                 if comando == "quit":
+ 311                     salir.set()
+ 312                 elif comando:
+ 313                     print("[fase] " + arbitro.intentar(comando), flush=True)
+ 314 
+ 315             if time.monotonic() >= proximo_informe:
+ 316                 proximo_informe += 5.0
+
+FILE 03_Informe_Resultados/fuente/informe.tex
+1254 obligan a revisar parte de los resultados. Se documentan aquí, con lo que cambió y lo que
+1255 no, en vez de reescribir el informe en silencio. La última ---el archivo de piezas
+1256 separadas--- es la que produjo el hallazgo de mayor severidad de todo el trabajo.
+1257 
+1258 \subsection{Corrección 1 --- El área de juego no tiene paredes}
+1259 
+1260 La superficie de $1\times1\ \mathrm{m}$ \textbf{no tiene bordes verticales}: lo que la
+1261 sobrepasa cae al vacío. El hallazgo H-09 se había formulado como «el rover choca contra
+1262 una pared y no puede ponerse detrás del cubo». El mecanismo es otro, y la consecuencia
+1263 tiene dos mitades opuestas.
+1264 
+1265 \paragraph{Se relaja la restricción cinemática.} Contra una pared el rover no puede
+1266 sobresalir; contra un precipicio puede voladizo, y cae recién cuando su polígono de
+1267 apoyo deja de contener al centro de masa. La condición operativa pasa a ser que la
+1268 línea de ruedas quede sobre el tablero, no todo el cuerpo.
+1269 
+1270 \paragraph{Y aparece un modo de falla terminal.} Con pared, empujar un cubo contra el
+1271 borde lo deja trabado; sin pared, el cubo \textbf{cae y se pierde}. Con pared, conducir
+1272 contra el borde produce un roce; sin pared, el rover \textbf{cae y la ronda termina}.
+1273 
+1274 \subsection{Corrección 2 --- Las dimensiones estaban en el repositorio}
+1275 
+1276 El ancho útil entre paletas se había señalado como el parámetro crítico a medir sobre el
+1277 robot físico. No hacía falta: el repositorio incluye
+1278 \texttt{archivos\_fabricacion/CENFOBOT\_Rover\_Rev1.dxf}, el CAD de corte de la cubierta.
+1279 
+1280 \begin{tcolorbox}[colback=black!3,colframe=black!50,boxrule=0.5pt,arc=1pt]
+1281 \textbf{Escala confirmada por tres vías independientes.} El DXF del rover no declara
+1282 unidades. Se verificó contra: (a) las ranuras de ensamble, de exactamente $3{,}00$
+1283 unidades, que es el espesor del acrílico declarado en el \texttt{README}; (b) los dos
+1284 agujeros de la placa frontal, de $16{,}17$ y $16{,}12$ unidades separados $24{,}00$,
+
+FILE 03_Informe_Resultados/fuente/informe.tex
+1324 había sido escalarla, con dos estimaciones que diferían un $52\%$. La conclusión
+1325 metodológica vale más que el error: \textbf{una fotografía en perspectiva, sin
+1326 referencias métricas en el plano de interés, no sirve para deducir geometría}, ni
+1327 cuantitativa ni cualitativamente. La única fuente confiable sin el robot en la mano es
+1328 el archivo de fabricación.
+1329 
+1330 \medskip
+1331 Ningún número de este informe cambia por la corrección: el código del banco siempre
+1332 implementó el canal paralelo. El embudo existió solo en la prosa de esa revisión.
+1333 \end{tcolorbox}
+1334 
+1335 \paragraph{Y el cubo puede girar libremente dentro del canal.} Como
+1336 $W_u = 93{,}50 > 84{,}85 = L\sqrt2$, no hay orientación que trabe el cubo entre las
+1337 paletas. Eso descarta el atasco, pero también significa que \textbf{nada impide que un
+1338 empuje descentrado lo haga rotar hasta $\Delta = 45\grados$}, que es la orientación de
+1339 peor tolerancia. Un cubo que entra alineado y gira durante el transporte ve su holgura
+1340 caer de $16{,}75$ a $4{,}32\ \mathrm{mm}$ sin que el sistema lo advierta.
+1341 
+1342 \subsection{Corrección 3 --- El archivo de piezas separadas cierra la geometría}
+1343 
+
+FILE 04_Banco_Pruebas/simulador.py
+ 216         for rv in self.rovers:
+ 217             v = float(np.clip(rv.v, -self.v_max, self.v_max))
+ 218             w = float(np.clip(rv.w, -self.w_max, self.w_max))
+ 219             rv.theta = (rv.theta + w * dt) % 360.0
+ 220             rv.p = rv.p + v * dt * u(rv.theta)
+ 221             # frontera del tablero fisico.
+ 222             # CRITERIO: el tablero NO TIENE PAREDES, asi que lo que decide no es
+ 223             # que el cuerpo entero quepa sino que el rover no vuelque. El apoyo
+ 224             # son las ruedas (bajo el chasis) y las puntas de las paletas, que
+ 225             # rozan el piso. Una paleta en voladizo sobre el vacio solo pierde
+ 226             # ese apoyo; el rover sigue sostenido por las ruedas. Por eso la
+ 227             # condicion se evalua sobre el CHASIS y no sobre la envolvente: usar
+ 228             # la envolvente con las paletas incluidas es el modelo de pared, no
+ 229             # el de precipicio, y da dos ordenes de magnitud mas de eventos.
+ 230             # Se PROYECTA de vuelta adentro (no se revierte el paso, porque
+ 231             # revertir deja al rover atrapado si ya estaba fuera).
+ 232             E = rv.cuerpo()
+ 233             corr = np.zeros(2)
+ 234             for k in (0, 1):
+ 235                 lo, hi = float(np.min(E[:, k])), float(np.max(E[:, k]))
+ 236                 if lo < -BORDE: corr[k] += (-BORDE - lo)
+ 237                 if hi > COLS * CELL + BORDE: corr[k] -= (hi - COLS * CELL - BORDE)
+ 238             fuera = bool(np.any(np.abs(corr) > 1e-9))
+ 239             if fuera:
+ 240                 if not getattr(rv, '_estaba_fuera', False):
+
+FILE 04_Banco_Pruebas/salidas/run_n3.txt
+   1 ================================================================================================
+   2 NIVEL N3 --- CAPA GEOMETRICA DE PLANIFICACION
+   3 ================================================================================================
+   4   parametros: W_ext=99.50  W_canal=93.50  Lambda=94.00  L=60  s=40
+   5               R_rov(chasis)=68.44  R_rov(con paletas)=113.49  rho_puesta=129.43 mm
+   6               v=120 mm/s  omega=90 deg/s  celda=20 mm
+   7 
+   8            deposito   inviab_disco    inviab_rect  banda_teorica_c
+   9            green            28.81%         25.89%             6.47
+  10            blue             28.81%         25.89%             6.47
+  11            red              28.81%         25.89%             6.47
+  12 
+  13            HALLAZGO H-05: la fraccion de cancha SIN empuje directo es grande.
+  14            Con el rectangulo real del rover: 25.9% de las posiciones de cubo.
+  15            El empuje multi-tramo NO es una rama muerta: hace falta para 1 de cada 3.9
+  16            posiciones posibles del cubo.
+  17 [  OK  ] N3.1    Mapa de factibilidad del punto de puesta             inviable_green_disco_pct=28.8149  inviable_green_rect_pct=25.8946  inviable_blue_disco_pct=28.8149  inviable_blue_rect_pct=25.8946
+  18            · HALLAZGO H-05: 25.9% de la cancha (modelo rectangulo) no admite empuje directo
+  19            · el modelo enunciaba la region cualitativamente; cuantificada resulta mayoritariamente
+  20            · relevante: el empuje multi-tramo es obligatorio, no opcional.
+  21            · el disco envolvente sobreestima la region en 2.9 puntos porcentuales
+  22 [  OK  ] N3.2    Embudo de tolerancia por dos vias independientes     err_entre_vias_mm=3.55e-14  e_max_min_mm=4.32359  e_max_max_mm=16.75  cota_teorica_mm=4.32359
+  23            · e_max in [4.32, 16.75] mm = [0.216, 0.838] celdas
+
+FILE Vision-Rover-Challenge-main_unz/Vision-Rover-Challenge-main/vision-system/contrato/CONTRATO.md
+ 430 ### 6.4. No naveguen con datos viejos
+ 431 
+ 432 Midan la latencia: **`ahora_ms - ts_ms`**. `ts_ms` es el instante de **captura**,
+ 433 así que ese número es la edad real del dato desde que la cámara lo vio.
+ 434 
+ 435 ```python
+ 436 latencia_ms = int(time.time() * 1000) - msg["ts_ms"]
+ 437 if latencia_ms > 500:
+ 438     frenar()        # estoy manejando a ciegas
+ 439 ```
+ 440 
+ 441 Si la latencia se dispara —red saturada, su bucle trabado, la visión atrasada—
+ 442 lo correcto es **frenar**, no seguir con la última orden. Un rover que sigue
+ 443 avanzando con datos de hace un segundo choca.
+ 444 
+ 445 > Esto supone que el reloj del rover y el de la visión están más o menos en
+ 446 > hora. Si difieren mucho, la latencia absoluta va a estar corrida; en ese caso
+ 447 > miren la **variación** de la latencia, que sigue siendo útil.
+ 448 
+ 449 ### 6.5. Validen la versión
+ 450 
+ 451 ```python
+ 452 if msg["v"] != 1:
+ 453     continue      # formato desconocido: descartar, no adivinar
+ 454 ```
+ 455 
+ 456 Es una línea y les evita interpretar mal un mensaje del futuro.
+ 457 
+ 458 ---
+ 459 
+ 460 ## 7. Herramientas incluidas y cómo correrlas
+ 461 
+ 462 Todo corre con **Python puro**: sin OpenCV, sin cámara, sin instalar nada.
+ 463 
+2:  "veredicto": "INSUFICIENTE",
+41:  "desfase_angular_grados": 359.5,
+42:  "dispersion_angular_grados": 0.998,
+_source/Rover Vision Artificial/Vision-Rover-Challenge-main_unz/Vision-Rover-Challenge-main/archivos_fabricacion/CENFOBOT_Rover_Rev1.dxf
+_source/Rover Vision Artificial/Vision-Rover-Challenge-main_unz/Vision-Rover-Challenge-main/archivos_fabricacion/cubos.dxf
+
+exec
+/bin/zsh -c "rg -n -i 'orientaci.n|rotad|girad|rotaci.n' vision-system/MONTAJE.md vision-system/vision/geometry/README.md aruco/README.md
+nl -ba vision-system/vision/mediciones/desfases_rover10_20260809_1924.json | head -49
+nl -ba vision-system/vision/mediciones/desfases_rover10_20260809_2010.json | head -46
+rg -n 'size|square|rect|radius|radio|lado|tolerancia' vision-system/vision/vista.py | head -20
+nl -ba codigos/ideaboard.py | sed -n '25,48p'" in /Users/ottogonzalez/Documents/rover/V1/_source/Rover Vision Artificial/Vision-Rover-Challenge-main_unz/Vision-Rover-Challenge-main
+ succeeded in 0ms:
+vision-system/MONTAJE.md:12:> **Si se pegan en el orden equivocado, TODAS las coordenadas salen rotadas o
+vision-system/MONTAJE.md:249:3. **La orientación no está espejada.** Mover un objeto **hacia la derecha** y
+vision-system/MONTAJE.md:259:   coordenadas está bien. Si están corridas, rotadas o inclinadas, hay un
+vision-system/vision/geometry/README.md:245:  orientación del rover ya era correcta antes de corregir nada.
+aruco/README.md:7:Además de reconocer el ID del marcador, un sistema de visión puede determinar su **posición y orientación dentro de la imagen**. Si la cámara está calibrada y se conoce el tamaño físico del marcador, también es posible utilizarlo como referencia para estimar posiciones y distancias en el espacio.
+aruco/README.md:40:La cámara puede utilizar estos códigos para determinar continuamente **qué rover está observando, dónde se encuentra y cuál es su orientación**. Esto permite realizar el seguimiento de ambos robots dentro del área del Vision Rover Challenge.
+     1	{
+     2	  "veredicto": "INSUFICIENTE",
+     3	  "motivos": [
+     4	    {
+     5	      "nivel": "ok",
+     6	      "texto": "arco de 328° sobre 24 muestras"
+     7	    },
+     8	    {
+     9	      "nivel": "malo",
+    10	      "texto": "residuo RMS de 22.74 mm: las muestras no describen un giro puro. Casi seguro el robot SE TRASLADÓ mientras giraba"
+    11	    },
+    12	    {
+    13	      "nivel": "malo",
+    14	      "texto": "los dos métodos discrepan 43.34 mm en el radio (lineal 10.71 vs Kåsa 54.05)"
+    15	    }
+    16	  ],
+    17	  "muestras": 24,
+    18	  "arco_grados": 327.98,
+    19	  "centro_celdas": [
+    20	    22.6106,
+    21	    19.8156
+    22	  ],
+    23	  "radio_lineal_mm": 10.714,
+    24	  "radio_kasa_mm": 54.051,
+    25	  "residuo_max_mm": 98.806,
+    26	  "residuo_rms_mm": 22.736,
+    27	  "altura_camara_mm": 2100.0,
+    28	  "factor_paralaje": 1.04478,
+    29	  "desfase_marcador_a_centro_mm_medido": [
+    30	    3.157,
+    31	    10.239
+    32	  ],
+    33	  "desfase_marcador_a_centro_mm_corregido": [
+    34	    3.021,
+    35	    9.8
+    36	  ],
+    37	  "desfase_angular_grados": 0.18,
+    38	  "dispersion_angular_grados": 0.975,
+    39	  "orientaciones": 4,
+    40	  "muestras_crudas": [
+    41	    {
+    42	      "col": 21.6506,
+    43	      "row": 19.4673,
+    44	      "phi_grados": 195.291
+    45	    },
+    46	    {
+    47	      "col": 21.6676,
+    48	      "row": 19.5857,
+    49	      "phi_grados": 207.151
+     1	{
+     2	  "veredicto": "INSUFICIENTE",
+     3	  "motivos": [
+     4	    {
+     5	      "nivel": "ok",
+     6	      "texto": "arco de 323° sobre 22 muestras"
+     7	    },
+     8	    {
+     9	      "nivel": "malo",
+    10	      "texto": "residuo RMS de 14.29 mm: las muestras no describen un giro puro. Casi seguro el robot SE TRASLADÓ mientras giraba"
+    11	    },
+    12	    {
+    13	      "nivel": "malo",
+    14	      "texto": "los dos métodos discrepan 26.40 mm en el radio (lineal 1.76 vs Kåsa 28.16)"
+    15	    },
+    16	    {
+    17	      "nivel": "flojo",
+    18	      "texto": "el desfase mide 1.76 mm, comparable al ruido: el marcador está prácticamente sobre el centro de giro y la DIRECCIÓN no está determinada. Conviene dejarlo en cero"
+    19	    }
+    20	  ],
+    21	  "muestras": 22,
+    22	  "arco_grados": 323.09,
+    23	  "centro_celdas": [
+    24	    23.9954,
+    25	    19.7076
+    26	  ],
+    27	  "radio_lineal_mm": 1.755,
+    28	  "radio_kasa_mm": 28.159,
+    29	  "residuo_max_mm": 54.694,
+    30	  "residuo_rms_mm": 14.293,
+    31	  "altura_camara_mm": 2100.0,
+    32	  "factor_paralaje": 1.04478,
+    33	  "desfase_marcador_a_centro_mm_medido": [
+    34	    1.67,
+    35	    0.539
+    36	  ],
+    37	  "desfase_marcador_a_centro_mm_corregido": [
+    38	    1.599,
+    39	    0.516
+    40	  ],
+    41	  "desfase_angular_grados": 359.5,
+    42	  "dispersion_angular_grados": 0.998,
+    43	  "orientaciones": 4,
+    44	  "muestras_crudas": [
+    45	    {
+    46	      "col": 23.5916,
+53:#: Colores en BGR, que es lo que dibuja OpenCV directamente sobre la imagen.
+108:        Es la comprobación visual más directa de que la geometría está bien: si
+110:        sistema de coordenadas es correcto. Si están corridas o rotadas, se ve
+153:        lado = self._cfg.elementos.cubos.lado_mm / self._cfg.tablero.cell_mm
+156:                [c.col - lado / 2, c.row - lado / 2], [c.col + lado / 2, c.row - lado / 2],
+157:                [c.col + lado / 2, c.row + lado / 2], [c.col - lado / 2, c.row + lado / 2],
+200:        if fondo.size:
+256:    # -- teclado y cierre --------------------------------------------------
+261:        Se atiende el teclado **desde la ventana** además de la consola: cuando
+    25	from simpleio import map_range
+    26	from adafruit_motor import servo, motor
+    27	import digitalio
+    28	import analogio
+    29	
+    30	
+    31	class IdeaBoard:
+    32	    UP = digitalio.Pull.UP
+    33	    DOWN = digitalio.Pull.DOWN
+    34	    
+    35	    def __init__(self):
+    36	        self._brightness = 0.3
+    37	        self._np = NeoPixel(board.NEOPIXEL, 1, brightness=self._brightness, auto_write=True)
+    38	        self._np[0] = (0,0,0)
+    39	        self._m1a = pwmio.PWMOut(board.IO12, duty_cycle=0, frequency=50)
+    40	        self._m1b = pwmio.PWMOut(board.IO14, duty_cycle=0, frequency=50)
+    41	        self._m2a = pwmio.PWMOut(board.IO13, duty_cycle=0, frequency=50)
+    42	        self._m2b = pwmio.PWMOut(board.IO15, duty_cycle=0, frequency=50)
+    43	        self.motor_1 = motor.DCMotor(self._m1a, self._m1b)
+    44	        self.motor_2 = motor.DCMotor(self._m2a, self._m2b)
+    45	        self.map_range = map_range
+    46	    
+    47	    
+    48	    @property
+
+codex
+The arithmetic in G5–G7 checks out. The remaining problems are assumptions: the source does not guarantee cube alignment after a push, 5 mm is an adopted error allowance rather than a measured standard deviation, and the 36% reachability figure was superseded. I also found that positive angles in `turn_angle.py` command clockwise turns—the opposite of telemetry θ.
+codex
+**Gate 1 + Gate 2: changes required.** F1’s coordinate transform is correct. The main blockers are depot assumptions, stale telemetry handling, and unverified pose/contact geometry. No files modified.
+
+References below use:
+- `O/` = `_source/Rover Vision Artificial/Vision-Rover-Challenge-main_unz/Vision-Rover-Challenge-main/`
+- `V/` = `O/vision-system/vision/`
+- `S/` = `_source/Rover Vision Artificial/`
+
+## CRITICAL
+
+**1. R4/R6: corner occlusion can freeze observations while messages still say `RUNNING`.**
+
+For axis-aligned corner markers, R4’s arithmetic is correct. At `(43,43)`:
+
+- Black marker: **100 mm**, spanning `[40.5,45.5]²` cells.
+- Including the **20 mm white border**: `[39.5,46.5]²`.
+- Depot example `(40.5,40.5)` is the black marker’s inward corner.
+- An aligned 60 mm cube centred there spans `[39,42]²`, overlapping **30 × 30 mm** of black marker, plus its white surround.
+
+Thus successive deliveries can obscure multiple anchors. Exact corner coincidence assumes marker alignment and the provisional depot coordinates.
+
+With **one marker missing**, vision requires a previously established four-marker homography and checks that the three visible centres deviate by at most **2 mm**. It can retain that geometry indefinitely. With **two missing**, geometry raises an error. Publication continues from the old state: `seq` increases, but `ts_ms`, object ages and possibly `phase` remain unchanged.
+
+Evidence: `V/config_vision.json:14`, `V/geometry/coordenadas.py:218`, `V/sistema.py:284`, `V/publish/telemetria.py:136`.
+
+**Fix:** require fresh capture timestamps and acceptable object ages in addition to `RUNNING`; use a motor-command watchdog. Effective observation age is approximately `now − ts_ms + age_ms`, with clock alignment. Validate depot placement against marker visibility before treating multi-cube delivery as feasible.
+
+## HIGH
+
+**2. R3: the 100 mm depot square is unsupported, and even the example positions are provisional.**
+
+No geometric depot boundary, size, shape or numerical delivery tolerance was found in the official sources. There **is** a general success criterion—correctly depositing assigned objects—but no test that implements “correctly.”
+
+Vision declares depot points in configuration and copies them into telemetry. It neither detects depot regions nor evaluates delivery. `config_simulador.json:59` explicitly marks positions and colours **unconfirmed against the physical setup**.
+
+The research simulator does define delivery: **cube-centre distance ≤ 1 cell = 20 mm**, independent of orientation. That is a research convention, not an official rule.
+
+Evidence: `O/reglamento.md:170`, `O/el_reto.md:135`, `O/vision-system/contrato/config_simulador.json:59`, `V/mundo.py:135`, `S/04_Banco_Pruebas/simulador.py:387`.
+
+**Fix:** default to the published point as the placement target, with a configurable engineering stopping tolerance. Keep official delivery status **unverified** until the actual acceptance criterion is supplied. Retain the 100 mm/full-containment model only as an explicitly experimental scenario.
+
+**3. G4 is semantically wrong; G2/G6/G7 lack a verified common reference point.**
+
+Published rover pose means **rotation centre and paddle-forward heading**, after marker-offset correction. It equals marker pose only because the current offsets are zero. Position is also corrected for marker-height parallax.
+
+The two rejected position-offset measurements do not establish zero offset. Angular alignment near zero was measured for **rover 10 with that particular marker mounting**, not both robots. Separately, the chassis-centre-to-axle offset remains unknown.
+
+Evidence: `V/detectors/rovers.py:128`, `:190`, `:272`; `V/config_vision.json:130`, `:139`, `:142`. Both `V/mediciones/desfases_rover10_20260809_*.json:2` report `INSUFICIENTE`.
+
+**Fix:** distinguish marker centre, axle midpoint and chassis centre. Measure their transforms for each rover; express collision geometry about the actual controlled point. Avoid applying an offset twice if vision already compensates it. Until measured, the **113.49 mm** sweep radius is conditional.
+
+**4. C1/C4: a push does not establish cube orientation.**
+
+The channel is wider than the cube’s maximum projection: **93.5 > 84.85 mm**. It permits every cube orientation. The research explicitly warns that a cube can rotate during transport. Actual verified face-to-face contact would constrain orientation, but telemetry does not establish that contact.
+
+The detector internally estimates cube angle modulo 90°, then tracking discards it. There is **no hidden orientation field in official v1 telemetry**. Modifying official vision to expose it conflicts with `robot.md`.
+
+Evidence: `S/03_Informe_Resultados/fuente/informe.tex:1335`; `V/detectors/cubos.py:230`, `:327`; `V/tracking/seguimiento.py:118`; `O/vision-system/contrato/schema.py:98`; `O/robot.md:95`.
+
+**Fix:** retain an orientation belief unless a validated contact manoeuvre constrains it. Erode the assumed depot by the worst cube projection over that belief. Do not set cube angle equal to commanded push heading automatically.
+
+**5. R8/F1: the supplied turn helper uses the opposite angle sign.**
+
+Wheel mapping is correct: motor 1 left, motor 2 right. However, `turn_angle.py` converts a **positive** requested angle into left-forward/right-reverse: **clockwise**. Telemetry and F1 use positive **counterclockwise** angles.
+
+Evidence: `O/codigos/wifi_command_receiver.py:56`; `O/codigos/turn_angle.py:128`, `:181`; `O/codigos/test_motores.py:27`.
+
+**Fix:** negate CCW angle requests when using that helper, or implement the canonical differential-drive convention:
+`ω = (v_right − v_left) / track`.
+
+## MEDIUM
+
+**6. G8: 5 mm is neither a measured Gaussian σ nor a universal occlusion bound.**
+
+The mock’s **0.06-cell positional σ = 1.2 mm** and **1.5° angular σ** are correct. The research’s 5 mm value is an adopted working allowance covering a reported **4.88 mm** synthetic error with roughly 22% occlusion.
+
+Published cube position estimates the **base-square centre**, using a fitted base/top silhouette—not the coloured blob centroid. This removes the intended centroid/parallax bias; it does not prove statistically unbiased measurements. At approximately 70% occlusion, documented fitting errors reach **34 mm**.
+
+Unreliable detections normally do not refresh position or age. Tracking retains the last accepted position, then removes it after **more than 60 seconds** without acceptance.
+
+Evidence: `O/vision-system/contrato/config_simulador.json:61`; `S/01_Modelo_Matematico/fuente/modelo.tex:656`; `V/detectors/cubos.py:85`, `:327`; `V/detectors/README.md:113`, `:137`; `V/tracking/seguimiento.py:114`, `:149`; `V/config_vision.json:84`.
+
+**Fix:** separate mock noise, observed fitting error, systematic bias and stale-position uncertainty. Grow uncertainty during occlusion; do not keep a fixed 5 mm envelope around a moving, unseen cube.
+
+**7. C2/C3: the reachability percentage is stale, and impossibility claims exceed the evidence.**
+
+The report revises **36.3% → 25.7%**; the stored N3 run gives **25.8946%**. More importantly, that calculation allows the **70 mm physical margin**, checks a chassis rectangle, and uses a **129.43 mm** staging distance. It does not implement strict R5 plus the asymmetric paddle footprint and G7’s 165.91 mm clearance.
+
+An exactly edge-trapped cube may be unrecoverable under specified push primitives. “In a non-depot corner” is too imprecise to prove impossibility.
+
+Evidence: `S/03_Informe_Resultados/fuente/informe.tex:1411`; `S/04_Banco_Pruebas/salidas/run_n3.txt:9`; `S/04_Banco_Pruebas/n3.py:12`, `:43`, `:56`, `:77`.
+
+**Fix:** remove the inherited percentage; recompute under the chosen footprint, boundary and staging policy. State impossibility only for defined contact configurations and permitted manipulation primitives.
+
+**8. R8: no measured throttle-to-speed calibration is provided.**
+
+`motor_calibration.py` estimates relative motor compensation using gyro drift. It does not measure millimetres travelled. The mock’s **6 cells/s = 120 mm/s** is a simulator parameter, not a throttle calibration.
+
+Evidence: `O/codigos/motor_calibration.py:3`, `:111`; `O/vision-system/contrato/config_simulador.json:34`; `O/codigos/ideaboard.py:39`.
+
+**Fix:** measure each wheel’s forward/reverse speed versus throttle, including deadband and pushing load. Do not infer distance from wheel diameter without measured rotation.
+
+**9. Missing strategy constraints and start-zone ambiguity.**
+
+- Both official robots must participate; physical/electronic modifications are prohibited.
+- Official vision cannot be modified.
+- No manual commands, object repositioning, code changes or selective robot restarts during a run.
+- Start from the assigned zone. `(0,0)` identifies its corner marker; configured `start=(2.5,2.5)` identifies the zone centre. No zone dimensions or two-rover starting arrangement are specified.
+- Time and correctly delivered object count are principal criteria. No numerical round limit, penalty schedule or collision-point tariff was found.
+
+Evidence: `O/reglamento.md:15`, `:99`, `:125`, `:152`, `:170`; `O/robot.md:95`; `V/config_vision.json:102`.
+
+**Fix:** add these constraints explicitly. Read `start` and depot mappings from telemetry; do not infer a 100 mm starting square or invent a round duration.
+
+## LOW
+
+**10. G1/G2: nominal dimensions are supported, but precision and provenance need qualification.**
+
+The assembled measurements used an uncalibrated ruler, approximately **±1 mm**. They support 55 mm paddle reach, roughly 100 × 150 mm envelope, 33 mm wheel diameter and 89 mm track. Paddle height is **0–14 mm**, with tips reaching the floor.
+
+The exact 93.5/99.5/94 mm dimensions come from the documented *separate-pieces DXF*. That DXF is absent from the supplied extracted files; the older supplied fabrication drawing has different reported dimensions.
+
+Evidence: `S/05_Mediciones_CAD/dimensiones_rover.md:29`, `:74`, `:144`, `:158`, `:201`; `S/05_Mediciones_CAD/medir_dxf.py:6`.
+
+**Fix:** label the rectangular chassis/rail model nominal and verify it on both assembled robots. Preserve measurement uncertainty in collision margins.
+
+**11. G7/C1: correct arithmetic, overstated wording.**
+
+G7’s circumscribed-disc clearance is a **sufficient full-rotation clearance**, not a necessary distance for every approach. C1’s quoted ±20/±7.6 mm values assume **zero margin**.
+
+Evidence: `S/04_Banco_Pruebas/modelo.py:161`; `S/05_Mediciones_CAD/recalcular.py:147`; `docs/interpretation_v0.md:47`, `:54`.
+
+**Fix:** state the manoeuvre assumptions and distinguish rotation, approach and delivery margins.
+
+## CONFIRMED claims
+
+- **R1:** TCP/NDJSON, port 2026, protocol v1 and nominal 20 Hz publication. Publication rate does **not** guarantee fresh observations. Evidence: `O/vision-system/contrato/CONTRATO.md:25`; `V/config_vision.json:89`.
+- **R2/R5:** current effective field is **860 × 860 mm**, versus **1000 × 1000 mm** physical board and 70 mm margins. Official mounting documentation calls those margins unused. Strict R5 is defensible; a nonzero overhang allowance is not established permission. No walls is supported by the research correction. Evidence: `O/vision-system/MONTAJE.md:127`; `S/03_Informe_Resultados/fuente/informe.tex:1258`.
+- **R3/R7/R9:** three colour-matched depot points; two robots, configured IDs 10/11; 2–3 unique-colour cubes; obstacles empty this edition. Identify by ID/colour and handle absent entries. Evidence: `O/vision-system/contrato/CONTRATO.md:192`, `:215`, `:230`, `:262`; `O/vision-system/contrato/config_simulador.json:28`.
+- **R6/R8:** movement only during `RUNNING`; central PC planning and automatic commands are permitted. Positive throttle means forward in the supplied examples; left turn is `motor_1<0`, `motor_2>0`. Evidence: `O/vision-system/contrato/CONTRATO.md:337`; `O/reglamento.md:73`; `O/codigos/test_motores.py:13`.
+- **F1:** **do not negate telemetry θ.** The detector computes `atan2(-forward_row, forward_col)`. For `(col,row,θ)=(10,20,90°)`, internal pose is **`(200 mm,460 mm,π/2)`**. Advancing 20 mm changes telemetry row to 19 and internal y to 480 mm. Evidence: `V/detectors/rovers.py:176`; `O/vision-system/contrato/CONTRATO.md:299`.
+- **G3/G4:** axle/chassis coincidence remains an assumption; position-offset attempts were rejected; approximately zero angular offset is supported for the measured rover only.
+- **G5–G7/C1 arithmetic:** independently recalculated, with the reference-point and orientation qualifications above:
+
+| Quantity | Verified value |
+|---|---:|
+| Cube projected width | 60–84.8528 mm |
+| Capture lateral tolerance | 4.3236–16.7500 mm |
+| Sweep radius about chassis centre | 113.4860 mm |
+| Straight paddle clearance, margin 10 mm | 154.4264 mm |
+| Full-rotation clearance, margin 10 mm | 165.9124 mm |
+| Assumed depot centre tolerance, aligned, margin 0 | ±20 mm |
+| Same, cube at 45°, margin 0 | ±7.5736 mm |
+| Same, cube at 45°, margin 10 mm | **Empty feasible region** |
+
+- **C4’s telemetry claim:** cube orientation is not transmitted. Any orientation inferred through interaction remains model-dependent.
+tokens used
+135,908
+**Gate 1 + Gate 2: changes required.** F1’s coordinate transform is correct. The main blockers are depot assumptions, stale telemetry handling, and unverified pose/contact geometry. No files modified.
+
+References below use:
+- `O/` = `_source/Rover Vision Artificial/Vision-Rover-Challenge-main_unz/Vision-Rover-Challenge-main/`
+- `V/` = `O/vision-system/vision/`
+- `S/` = `_source/Rover Vision Artificial/`
+
+## CRITICAL
+
+**1. R4/R6: corner occlusion can freeze observations while messages still say `RUNNING`.**
+
+For axis-aligned corner markers, R4’s arithmetic is correct. At `(43,43)`:
+
+- Black marker: **100 mm**, spanning `[40.5,45.5]²` cells.
+- Including the **20 mm white border**: `[39.5,46.5]²`.
+- Depot example `(40.5,40.5)` is the black marker’s inward corner.
+- An aligned 60 mm cube centred there spans `[39,42]²`, overlapping **30 × 30 mm** of black marker, plus its white surround.
+
+Thus successive deliveries can obscure multiple anchors. Exact corner coincidence assumes marker alignment and the provisional depot coordinates.
+
+With **one marker missing**, vision requires a previously established four-marker homography and checks that the three visible centres deviate by at most **2 mm**. It can retain that geometry indefinitely. With **two missing**, geometry raises an error. Publication continues from the old state: `seq` increases, but `ts_ms`, object ages and possibly `phase` remain unchanged.
+
+Evidence: `V/config_vision.json:14`, `V/geometry/coordenadas.py:218`, `V/sistema.py:284`, `V/publish/telemetria.py:136`.
+
+**Fix:** require fresh capture timestamps and acceptable object ages in addition to `RUNNING`; use a motor-command watchdog. Effective observation age is approximately `now − ts_ms + age_ms`, with clock alignment. Validate depot placement against marker visibility before treating multi-cube delivery as feasible.
+
+## HIGH
+
+**2. R3: the 100 mm depot square is unsupported, and even the example positions are provisional.**
+
+No geometric depot boundary, size, shape or numerical delivery tolerance was found in the official sources. There **is** a general success criterion—correctly depositing assigned objects—but no test that implements “correctly.”
+
+Vision declares depot points in configuration and copies them into telemetry. It neither detects depot regions nor evaluates delivery. `config_simulador.json:59` explicitly marks positions and colours **unconfirmed against the physical setup**.
+
+The research simulator does define delivery: **cube-centre distance ≤ 1 cell = 20 mm**, independent of orientation. That is a research convention, not an official rule.
+
+Evidence: `O/reglamento.md:170`, `O/el_reto.md:135`, `O/vision-system/contrato/config_simulador.json:59`, `V/mundo.py:135`, `S/04_Banco_Pruebas/simulador.py:387`.
+
+**Fix:** default to the published point as the placement target, with a configurable engineering stopping tolerance. Keep official delivery status **unverified** until the actual acceptance criterion is supplied. Retain the 100 mm/full-containment model only as an explicitly experimental scenario.
+
+**3. G4 is semantically wrong; G2/G6/G7 lack a verified common reference point.**
+
+Published rover pose means **rotation centre and paddle-forward heading**, after marker-offset correction. It equals marker pose only because the current offsets are zero. Position is also corrected for marker-height parallax.
+
+The two rejected position-offset measurements do not establish zero offset. Angular alignment near zero was measured for **rover 10 with that particular marker mounting**, not both robots. Separately, the chassis-centre-to-axle offset remains unknown.
+
+Evidence: `V/detectors/rovers.py:128`, `:190`, `:272`; `V/config_vision.json:130`, `:139`, `:142`. Both `V/mediciones/desfases_rover10_20260809_*.json:2` report `INSUFICIENTE`.
+
+**Fix:** distinguish marker centre, axle midpoint and chassis centre. Measure their transforms for each rover; express collision geometry about the actual controlled point. Avoid applying an offset twice if vision already compensates it. Until measured, the **113.49 mm** sweep radius is conditional.
+
+**4. C1/C4: a push does not establish cube orientation.**
+
+The channel is wider than the cube’s maximum projection: **93.5 > 84.85 mm**. It permits every cube orientation. The research explicitly warns that a cube can rotate during transport. Actual verified face-to-face contact would constrain orientation, but telemetry does not establish that contact.
+
+The detector internally estimates cube angle modulo 90°, then tracking discards it. There is **no hidden orientation field in official v1 telemetry**. Modifying official vision to expose it conflicts with `robot.md`.
+
+Evidence: `S/03_Informe_Resultados/fuente/informe.tex:1335`; `V/detectors/cubos.py:230`, `:327`; `V/tracking/seguimiento.py:118`; `O/vision-system/contrato/schema.py:98`; `O/robot.md:95`.
+
+**Fix:** retain an orientation belief unless a validated contact manoeuvre constrains it. Erode the assumed depot by the worst cube projection over that belief. Do not set cube angle equal to commanded push heading automatically.
+
+**5. R8/F1: the supplied turn helper uses the opposite angle sign.**
+
+Wheel mapping is correct: motor 1 left, motor 2 right. However, `turn_angle.py` converts a **positive** requested angle into left-forward/right-reverse: **clockwise**. Telemetry and F1 use positive **counterclockwise** angles.
+
+Evidence: `O/codigos/wifi_command_receiver.py:56`; `O/codigos/turn_angle.py:128`, `:181`; `O/codigos/test_motores.py:27`.
+
+**Fix:** negate CCW angle requests when using that helper, or implement the canonical differential-drive convention:
+`ω = (v_right − v_left) / track`.
+
+## MEDIUM
+
+**6. G8: 5 mm is neither a measured Gaussian σ nor a universal occlusion bound.**
+
+The mock’s **0.06-cell positional σ = 1.2 mm** and **1.5° angular σ** are correct. The research’s 5 mm value is an adopted working allowance covering a reported **4.88 mm** synthetic error with roughly 22% occlusion.
+
+Published cube position estimates the **base-square centre**, using a fitted base/top silhouette—not the coloured blob centroid. This removes the intended centroid/parallax bias; it does not prove statistically unbiased measurements. At approximately 70% occlusion, documented fitting errors reach **34 mm**.
+
+Unreliable detections normally do not refresh position or age. Tracking retains the last accepted position, then removes it after **more than 60 seconds** without acceptance.
+
+Evidence: `O/vision-system/contrato/config_simulador.json:61`; `S/01_Modelo_Matematico/fuente/modelo.tex:656`; `V/detectors/cubos.py:85`, `:327`; `V/detectors/README.md:113`, `:137`; `V/tracking/seguimiento.py:114`, `:149`; `V/config_vision.json:84`.
+
+**Fix:** separate mock noise, observed fitting error, systematic bias and stale-position uncertainty. Grow uncertainty during occlusion; do not keep a fixed 5 mm envelope around a moving, unseen cube.
+
+**7. C2/C3: the reachability percentage is stale, and impossibility claims exceed the evidence.**
+
+The report revises **36.3% → 25.7%**; the stored N3 run gives **25.8946%**. More importantly, that calculation allows the **70 mm physical margin**, checks a chassis rectangle, and uses a **129.43 mm** staging distance. It does not implement strict R5 plus the asymmetric paddle footprint and G7’s 165.91 mm clearance.
+
+An exactly edge-trapped cube may be unrecoverable under specified push primitives. “In a non-depot corner” is too imprecise to prove impossibility.
+
+Evidence: `S/03_Informe_Resultados/fuente/informe.tex:1411`; `S/04_Banco_Pruebas/salidas/run_n3.txt:9`; `S/04_Banco_Pruebas/n3.py:12`, `:43`, `:56`, `:77`.
+
+**Fix:** remove the inherited percentage; recompute under the chosen footprint, boundary and staging policy. State impossibility only for defined contact configurations and permitted manipulation primitives.
+
+**8. R8: no measured throttle-to-speed calibration is provided.**
+
+`motor_calibration.py` estimates relative motor compensation using gyro drift. It does not measure millimetres travelled. The mock’s **6 cells/s = 120 mm/s** is a simulator parameter, not a throttle calibration.
+
+Evidence: `O/codigos/motor_calibration.py:3`, `:111`; `O/vision-system/contrato/config_simulador.json:34`; `O/codigos/ideaboard.py:39`.
+
+**Fix:** measure each wheel’s forward/reverse speed versus throttle, including deadband and pushing load. Do not infer distance from wheel diameter without measured rotation.
+
+**9. Missing strategy constraints and start-zone ambiguity.**
+
+- Both official robots must participate; physical/electronic modifications are prohibited.
+- Official vision cannot be modified.
+- No manual commands, object repositioning, code changes or selective robot restarts during a run.
+- Start from the assigned zone. `(0,0)` identifies its corner marker; configured `start=(2.5,2.5)` identifies the zone centre. No zone dimensions or two-rover starting arrangement are specified.
+- Time and correctly delivered object count are principal criteria. No numerical round limit, penalty schedule or collision-point tariff was found.
+
+Evidence: `O/reglamento.md:15`, `:99`, `:125`, `:152`, `:170`; `O/robot.md:95`; `V/config_vision.json:102`.
+
+**Fix:** add these constraints explicitly. Read `start` and depot mappings from telemetry; do not infer a 100 mm starting square or invent a round duration.
+
+## LOW
+
+**10. G1/G2: nominal dimensions are supported, but precision and provenance need qualification.**
+
+The assembled measurements used an uncalibrated ruler, approximately **±1 mm**. They support 55 mm paddle reach, roughly 100 × 150 mm envelope, 33 mm wheel diameter and 89 mm track. Paddle height is **0–14 mm**, with tips reaching the floor.
+
+The exact 93.5/99.5/94 mm dimensions come from the documented *separate-pieces DXF*. That DXF is absent from the supplied extracted files; the older supplied fabrication drawing has different reported dimensions.
+
+Evidence: `S/05_Mediciones_CAD/dimensiones_rover.md:29`, `:74`, `:144`, `:158`, `:201`; `S/05_Mediciones_CAD/medir_dxf.py:6`.
+
+**Fix:** label the rectangular chassis/rail model nominal and verify it on both assembled robots. Preserve measurement uncertainty in collision margins.
+
+**11. G7/C1: correct arithmetic, overstated wording.**
+
+G7’s circumscribed-disc clearance is a **sufficient full-rotation clearance**, not a necessary distance for every approach. C1’s quoted ±20/±7.6 mm values assume **zero margin**.
+
+Evidence: `S/04_Banco_Pruebas/modelo.py:161`; `S/05_Mediciones_CAD/recalcular.py:147`; `docs/interpretation_v0.md:47`, `:54`.
+
+**Fix:** state the manoeuvre assumptions and distinguish rotation, approach and delivery margins.
+
+## CONFIRMED claims
+
+- **R1:** TCP/NDJSON, port 2026, protocol v1 and nominal 20 Hz publication. Publication rate does **not** guarantee fresh observations. Evidence: `O/vision-system/contrato/CONTRATO.md:25`; `V/config_vision.json:89`.
+- **R2/R5:** current effective field is **860 × 860 mm**, versus **1000 × 1000 mm** physical board and 70 mm margins. Official mounting documentation calls those margins unused. Strict R5 is defensible; a nonzero overhang allowance is not established permission. No walls is supported by the research correction. Evidence: `O/vision-system/MONTAJE.md:127`; `S/03_Informe_Resultados/fuente/informe.tex:1258`.
+- **R3/R7/R9:** three colour-matched depot points; two robots, configured IDs 10/11; 2–3 unique-colour cubes; obstacles empty this edition. Identify by ID/colour and handle absent entries. Evidence: `O/vision-system/contrato/CONTRATO.md:192`, `:215`, `:230`, `:262`; `O/vision-system/contrato/config_simulador.json:28`.
+- **R6/R8:** movement only during `RUNNING`; central PC planning and automatic commands are permitted. Positive throttle means forward in the supplied examples; left turn is `motor_1<0`, `motor_2>0`. Evidence: `O/vision-system/contrato/CONTRATO.md:337`; `O/reglamento.md:73`; `O/codigos/test_motores.py:13`.
+- **F1:** **do not negate telemetry θ.** The detector computes `atan2(-forward_row, forward_col)`. For `(col,row,θ)=(10,20,90°)`, internal pose is **`(200 mm,460 mm,π/2)`**. Advancing 20 mm changes telemetry row to 19 and internal y to 480 mm. Evidence: `V/detectors/rovers.py:176`; `O/vision-system/contrato/CONTRATO.md:299`.
+- **G3/G4:** axle/chassis coincidence remains an assumption; position-offset attempts were rejected; approximately zero angular offset is supported for the measured rover only.
+- **G5–G7/C1 arithmetic:** independently recalculated, with the reference-point and orientation qualifications above:
+
+| Quantity | Verified value |
+|---|---:|
+| Cube projected width | 60–84.8528 mm |
+| Capture lateral tolerance | 4.3236–16.7500 mm |
+| Sweep radius about chassis centre | 113.4860 mm |
+| Straight paddle clearance, margin 10 mm | 154.4264 mm |
+| Full-rotation clearance, margin 10 mm | 165.9124 mm |
+| Assumed depot centre tolerance, aligned, margin 0 | ±20 mm |
+| Same, cube at 45°, margin 0 | ±7.5736 mm |
+| Same, cube at 45°, margin 10 mm | **Empty feasible region** |
+
+- **C4’s telemetry claim:** cube orientation is not transmitted. Any orientation inferred through interaction remains model-dependent.
+EXIT 0
