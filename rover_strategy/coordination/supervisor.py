@@ -572,9 +572,15 @@ class Supervisor:
             elif self._conflict(rid, polys):
                 why = "reservation"
             else:
-                target = a.task.color if (a.task and a.engaged) else None
-                for c in self._cube_obstacles(exclude=target):
-                    rr = c.r - self.cfg.margins.cube_nav + 2.0
+                # Physical non-contact only (planning margins are the planners' job): each cube as a disc of its
+                # worst-case half extent + 2 mm; the engaged target cube is excluded.
+                target = a.task.color if (a.task and (a.engaged or a.state == S.ALIGN)) else None
+                for color, tr in self.cubes.items():
+                    if color == target:
+                        continue
+                    c = tr.estimate(self.t)
+                    alpha = c.alpha if (c.alpha is not None and c.alpha_std < math.radians(15)) else None
+                    rr = cube_half_extent(self.cfg.cube.side, alpha) + 2.0
                     if any(shapes.disc_distance(p, (c.x, c.y), rr) <= 0.0 for p in polys) and \
                             shapes.disc_distance(now_env, (c.x, c.y), rr) > 0.0:
                         why = "cube"

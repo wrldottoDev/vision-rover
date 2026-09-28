@@ -188,8 +188,9 @@ _GAP_REL = 0.15
 # Heading-innovation bias detector (per vision frame): noise sigma 1.5 deg -> EMA sigma ~0.6 deg.
 _BIAS_ALPHA = 0.25
 _BIAS_CLIP_RAD = math.radians(10.0)
-_BIAS_LOST_RAD = math.radians(2.0)
+_BIAS_LOST_RAD = math.radians(2.5)
 _FAULT_LATCH_S = 1.5
+_BIAS_ARM_S = 0.25         # command must be steady this long before its innovations count as fault evidence
 
 _H_POSE = np.array([
     [1.0, 0.0, 0.0, 0.0, 0.0],
@@ -252,6 +253,10 @@ class PoseEstimator:
         # Appended, not inserted: callers (a live control loop) issue commands in
         # non-decreasing t order. bisect_right in _cmd_active then resolves same-
         # timestamp duplicates as "last write wins", matching append order.
+        if self._cmd_hist:
+            _, v0, w0 = self._cmd_hist[-1]
+            if abs(v_cmd - v0) > 15.0 or abs(w_cmd - w0) > 0.2:
+                self._cmd_step_t = t          # transients after a command step are not actuator-fault evidence
         self._cmd_hist.append((t, v_cmd, w_cmd))
         self._trim_history()
 
@@ -451,7 +456,10 @@ class PoseEstimator:
         h_in = max(-_BIAS_CLIP_RAD, min(_BIAS_CLIP_RAD, float(innov[2])))
         self._h_bias_ema = (1.0 - _BIAS_ALPHA) * self._h_bias_ema + _BIAS_ALPHA * h_in
         v_c, w_c = self._cmd_active(t_capture)
-        commanding = abs(v_c) > 5.0 or abs(w_c) > 0.05      # actuator-fault evidence only exists while moving
+        # Actuator-fault evidence only during MEANINGFUL commanded motion: tiny deadband kicks produce model-mismatch
+        # heading bias on healthy motors (closed-loop finding).
+        steady = t_capture - getattr(self, "_cmd_step_t", -math.inf) > _BIAS_ARM_S
+        commanding = (abs(v_c) > 40.0 or abs(w_c) > 0.5) and steady
         if commanding and abs(self._h_bias_ema) > _BIAS_LOST_RAD:
             self._fault_until = t_now + _FAULT_LATCH_S     # latch: a detected actuator fault holds LOST a while
 

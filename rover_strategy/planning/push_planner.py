@@ -42,6 +42,9 @@ class PushParams:
     # exactly where planned (push stop error, slip), and a plan that is feasible only at the exact planned
     # point fails on replan (lead, closed-loop finding).  TUNED.
     intermediate_slack_mm: float = 10.0
+    # Require a rotate-in-place + straight approach to every pre-push pose (navigation has no arcs yet).  OFF: with
+    # it, single-cube coverage drops from ~65 % to 5-29 % (tools/solvability_map.py); arcs in navigation are the fix.
+    require_straight_approach: bool = False
 
     # ASSUMED: minimum push distance for the cube to travel far enough to square flush against the
     # plate (rather than just kiss it).  Shorter "legs" are rejected as not physically meaningful.
@@ -278,7 +281,30 @@ def _prepush_ok(cfg: Config, fp: Footprint, pose: Pose, target_xy: tuple[float, 
     for oc in other_cubes:
         if math.hypot(pose.x - oc.x, pose.y - oc.y) < thresh:
             return False
+    if DEFAULT_PARAMS.require_straight_approach:
+        return _approach_reachable(cfg, fp, pose, other_cubes, board_w, board_h)
     return True
+
+
+def _approach_reachable(cfg: Config, fp: Footprint, pose: Pose, other_cubes: Sequence[CubeEstimate],
+                        board_w: float, board_h: float, max_back: float = 320.0, step: float = 20.0) -> bool:
+    """The navigation planner only has in-place rotations and straight moves (no arcs yet): a pre-push pose is
+    reachable only if, somewhere behind it on the push line, the rover can turn in place fully inside the field and
+    then drive straight in.  (Lead, closed-loop finding: edge-parallel pre-push poses were certified but could never
+    be reached.)  ponytail: straight-in approach only; arc primitives in navigation would relax this."""
+    m = cfg.margins.board
+    r = fp.sweep_radius + cfg.margins.pose_uncertainty
+    c, s_ = math.cos(pose.theta), math.sin(pose.theta)
+    for k in range(0, int(max_back / step) + 1):
+        bx, by = pose.x - k * step * c, pose.y - k * step * s_
+        if not (m + r <= bx <= board_w - m - r and m + r <= by <= board_h - m - r):
+            continue
+        if any(math.hypot(bx - oc.x, by - oc.y) < r + cfg.cube.half_diag + cfg.margins.cube_nav for oc in other_cubes):
+            continue
+        sweep = fp.straight_sweep(bx, by, pose.theta, k * step)
+        if S.inside_rect(sweep, m, board_w - m, m, board_h - m):
+            return True
+    return False
 
 
 def is_delivered(cfg: Config, cube: CubeEstimate, depot: DepotZone) -> bool:
