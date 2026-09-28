@@ -1,6 +1,11 @@
 # Known issues (keep current; newest first)
 
 ## Blocking
+- **Monte Carlo baseline (2026-09-28, official_like seeds 100-111, strict field rule, 600 s):** 1/36 cubes delivered,
+  0 rover-rover collisions, 0 board exits, 3 non-target contacts. Dominant causes: no push plan (strict-rule geometry
+  + cluttered layouts where other cubes block every corridor; no "move the blocker first" reasoning) and stalls.
+  Seed 0 (hand-debugged): 2/3 delivered, both rovers, 0 collisions/exits. Numbers are SIMULATION ONLY and the
+  simulator judge is still being fixed (Gate 10).
 - **No closed-loop delivery yet.** Single-rover: navigation, alignment, capture and first push leg work; failures seen
   in align timeouts, capture-verification after interrupted capture, and occasional replanning dead ends. Two
   rovers starting < 45 mm apart still spend long periods in WAIT/yield churn (`tools/debug_run.py 0 official_like`).
