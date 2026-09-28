@@ -131,7 +131,9 @@ def test_edge_hugging_cube_needs_multi_leg():
     # 75 mm from the edge: the rover can never get west of it (edge-locked: only along-edge motion), and the
     # depot is east -> no plan.  Physics of pushing without walls, not a planner weakness.
     assert not planner.plan(CubeEstimate("red", 75.0, 430.0), depot, [], BOARD, BOARD)
-    cube = CubeEstimate("red", 260.0, 200.0)    # far enough from the edges to be re-routed
+    # (260, 200) became infeasible under the strict field rule once pre-push poses reserve +-6 deg alignment room
+    # (edge-parallel final legs impossible, DECISIONS #18); (300, 250) is re-routable.
+    cube = CubeEstimate("red", 300.0, 250.0)
     plans = planner.plan(cube, depot, [], BOARD, BOARD, max_plans=5, deadline_s=3.0)
     assert plans, planner.last_failure
     assert all(len(p.legs) >= 1 for p in plans)
