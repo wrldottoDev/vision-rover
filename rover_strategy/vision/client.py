@@ -5,21 +5,41 @@ from __future__ import annotations
 import json
 import socket
 import time
+from collections.abc import Collection, Mapping
 
 from ..config import Config, DEFAULT
 from ..world import Frame
-from .parser import TelemetryError, parse_message
+from .parser import (
+    ACCEPTED_VERSIONS,
+    VersionAdapter,
+    TelemetryError,
+    UnsupportedVersion,
+    parse_message,
+)
 
 DEFAULT_PORT = 2026
 
 
 class VisionClient:
-    def __init__(self, host: str = "127.0.0.1", port: int = DEFAULT_PORT, cfg: Config = DEFAULT):
+    def __init__(
+        self,
+        host: str = "127.0.0.1",
+        port: int = DEFAULT_PORT,
+        cfg: Config = DEFAULT,
+        *,
+        accepted_versions: Collection[int] | None = None,
+        adapters: Mapping[int, VersionAdapter] | None = None,
+    ):
         self.addr = (host, port)
         self.cfg = cfg
+        self.accepted_versions = frozenset(
+            ACCEPTED_VERSIONS if accepted_versions is None else accepted_versions
+        )
+        self.adapters = adapters
         self.sock: socket.socket | None = None
         self.buf = b""
         self.dropped_invalid = 0
+        self.dropped_unknown_versions = 0
         self.last_seq: int | None = None
         self.seq_gaps = 0
 
@@ -51,7 +71,17 @@ class VisionClient:
             if not line.strip():
                 continue
             try:
-                frame = parse_message(json.loads(line), time.time(), self.cfg)
+                frame = parse_message(
+                    json.loads(line),
+                    time.time(),
+                    self.cfg,
+                    accepted_versions=self.accepted_versions,
+                    adapters=self.adapters,
+                )
+            except UnsupportedVersion:
+                self.dropped_invalid += 1
+                self.dropped_unknown_versions += 1
+                continue
             except (json.JSONDecodeError, TelemetryError, KeyError, TypeError, ValueError):
                 self.dropped_invalid += 1
                 continue
