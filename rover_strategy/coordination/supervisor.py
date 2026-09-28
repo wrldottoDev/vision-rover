@@ -226,6 +226,12 @@ class Supervisor:
                     out.append(PolyObstacle(_inflate(q, self.cfg.margins.rover_rover)))
                     continue
                 # the planner also inflates MY footprint by pose_uncertainty: subtract it, or my start is "inside"
+                if shapes.overlap(mine, q):
+                    # A reserved polygon (typically the other rover's swept path) already overlaps my body: I cannot
+                    # plan "out of" an obstacle, and freezing forever is worse.  Skip it for planning; the physical
+                    # bodies stay protected by the imminent-collision layer.  (Closed-loop finding, seed 104.)
+                    self._count("reserved_overlap_skipped")
+                    continue
                 pad = min(self.cfg.margins.rover_rover,
                           max(0.0, shapes.distance(mine, q) - self.cfg.margins.pose_uncertainty - 3.0))
                 out.append(PolyObstacle(_inflate(q, pad)))

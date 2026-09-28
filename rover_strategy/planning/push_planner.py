@@ -51,6 +51,7 @@ class PushParams:
     # ASSUMED: minimum push distance for the cube to travel far enough to square flush against the
     # plate (rather than just kiss it).  Shorter "legs" are rejected as not physically meaningful.
     min_leg_length: float = 25.0
+    min_corrective_leg: float = 5.0       # known-orientation cubes (see leg_feasible).  TUNED.
     # ASSUMED, additive to rover.paddle_reach: extra clearance on the post-push retreat (H-15).
     retreat_margin_mm: float = 10.0
     # TUNED: grid pitch for sampling intermediate waypoints in 2-/3-leg search. Trade-off: finer
@@ -196,7 +197,10 @@ def leg_feasible(cfg: Config, fp: Footprint, cube_xy: tuple[float, float], alpha
     leg is being taken and are the caller's job (see `PushPlanner._leg_attempt`, `classify_unsolvable`).
     `other_cubes` must already exclude the pushed cube itself.
     """
-    if length < DEFAULT_PARAMS.min_leg_length:
+    # A cube of KNOWN orientation (already squared by a previous push) needs no squaring distance: allow short
+    # corrective legs (closed-loop finding: final pushes stopping ~7 mm short could never be corrected).
+    min_len = DEFAULT_PARAMS.min_corrective_leg if alpha is not None else DEFAULT_PARAMS.min_leg_length
+    if length < min_len:
         return False, "leg too short to square the cube against the plate"
 
     cx, cy = cube_xy
