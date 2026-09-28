@@ -81,15 +81,41 @@ def _proj(P: list[Pt], nx: float, ny: float) -> tuple[float, float]:
 
 def _bbox_overlap(A: list[Pt], B: list[Pt]) -> bool:
     """Cheap conservative broad phase for the small convex polygons here."""
-    aminx = min(p[0] for p in A)
-    amaxx = max(p[0] for p in A)
-    aminy = min(p[1] for p in A)
-    amaxy = max(p[1] for p in A)
-    bminx = min(p[0] for p in B)
-    bmaxx = max(p[0] for p in B)
-    bminy = min(p[1] for p in B)
-    bmaxy = max(p[1] for p in B)
+    aminx = amaxx = A[0][0]
+    aminy = amaxy = A[0][1]
+    for x, y in A[1:]:
+        if x < aminx: aminx = x
+        if x > amaxx: amaxx = x
+        if y < aminy: aminy = y
+        if y > amaxy: amaxy = y
+    bminx = bmaxx = B[0][0]
+    bminy = bmaxy = B[0][1]
+    for x, y in B[1:]:
+        if x < bminx: bminx = x
+        if x > bmaxx: bmaxx = x
+        if y < bminy: bminy = y
+        if y > bmaxy: bmaxy = y
     return not (amaxx < bminx or bmaxx < aminx or amaxy < bminy or bmaxy < aminy)
+
+
+def _bbox(P: list[Pt]) -> tuple[float, float, float, float]:
+    min_x = max_x = P[0][0]
+    min_y = max_y = P[0][1]
+    for x, y in P[1:]:
+        if x < min_x: min_x = x
+        if x > max_x: max_x = x
+        if y < min_y: min_y = y
+        if y > max_y: max_y = y
+    return min_x, max_x, min_y, max_y
+
+
+def _bbox_overlap_cached(a: tuple[float, float, float, float],
+                        b: tuple[float, float, float, float]) -> bool:
+    return not (a[1] < b[0] or b[1] < a[0] or a[3] < b[2] or b[3] < a[2])
+
+
+def _inside_rect(P: list[Pt], x0: float, x1: float, y0: float, y1: float) -> bool:
+    return all(x0 <= x <= x1 and y0 <= y <= y1 for x, y in P)
 
 
 def _mean(P: list[Pt]) -> Pt:
@@ -284,6 +310,30 @@ def _inverse_piecewise_linear(y: float, xs: tuple[float, ...], ys: tuple[float, 
     return xs[-1]
 
 
+_MOTOR_TABLE_SIZE = 1000
+
+
+def _lookup_table(curve: tuple[float, ...], scale: float = 1.0) -> tuple[float, ...]:
+    """Compile a normalized piecewise curve for constant-time hot-path lookup."""
+    return tuple(scale * _piecewise_linear(i / _MOTOR_TABLE_SIZE, THROTTLE_KNOTS, curve)
+                 for i in range(_MOTOR_TABLE_SIZE + 1))
+
+
+def _inverse_lookup_table(curve: tuple[float, ...]) -> tuple[float, ...]:
+    return tuple(_inverse_piecewise_linear(i / _MOTOR_TABLE_SIZE, THROTTLE_KNOTS, curve)
+                 for i in range(_MOTOR_TABLE_SIZE + 1))
+
+
+_NOMINAL_INVERSE_TABLE = _inverse_lookup_table(NOMINAL_CURVE)
+
+
+def _table_value(x: float, table: tuple[float, ...]) -> float:
+    """Linearly interpolate a normalized lookup table value in [0, 1]."""
+    scaled = min(1.0, max(0.0, x)) * _MOTOR_TABLE_SIZE
+    index = min(_MOTOR_TABLE_SIZE - 1, int(scaled))
+    return table[index] + (table[index + 1] - table[index]) * (scaled - index)
+
+
 
 @dataclass(frozen=True)
 class MotorParams:
@@ -317,12 +367,29 @@ class MotorParams:
     # USER-REPORTED: pushing a cube costs about 20 mm over a 500 mm run.
     pushing_speed_loss: float = 0.04
 
+    def __post_init__(self) -> None:
+        # Private caches are deliberately not dataclass fields: scenario JSON
+        # must contain physical parameters only.
+        object.__setattr__(self, "_true_left_table",
+                           _lookup_table(self.curve_left, self.full_speed_left_factor * self.gain_left))
+        object.__setattr__(self, "_true_right_table",
+                           _lookup_table(self.curve_right, self.full_speed_right_factor * self.gain_right))
+
     def throttle_for_command(self, command_mm_s: float) -> float:
         """Map a signed wheel-speed command (mm/s) to nominal throttle."""
         if abs(command_mm_s) < self.deadband_mm_s:
             return 0.0
         fraction = min(1.0, abs(command_mm_s) / max(self.max_wheel_speed_mm_s, 1e-9))
-        throttle = _inverse_piecewise_linear(fraction, THROTTLE_KNOTS, NOMINAL_CURVE)
+        # Preserve the measured knots exactly (important for calibration
+        # assertions); all other commands use the compiled interpolation.
+        if abs(fraction - NOMINAL_CURVE[1]) < 1e-12:
+            throttle = THROTTLE_KNOTS[1]
+        elif abs(fraction - NOMINAL_CURVE[2]) < 1e-12:
+            throttle = THROTTLE_KNOTS[2]
+        elif abs(fraction - NOMINAL_CURVE[3]) < 1e-12:
+            throttle = THROTTLE_KNOTS[3]
+        else:
+            throttle = _table_value(fraction, _NOMINAL_INVERSE_TABLE)
         return math.copysign(throttle, command_mm_s)
 
     def speed_at_throttle(self, throttle: float, wheel: str) -> float:
@@ -331,12 +398,8 @@ class MotorParams:
             raise ValueError(f"wheel must be 'left' or 'right', got {wheel!r}")
         sign = -1.0 if throttle < 0.0 else 1.0
         magnitude = min(1.0, abs(throttle))
-        curve = self.curve_left if wheel == "left" else self.curve_right
-        full_factor = self.full_speed_left_factor if wheel == "left" else self.full_speed_right_factor
-        gain = self.gain_left if wheel == "left" else self.gain_right
-        return sign * self.max_wheel_speed_mm_s * full_factor * gain * _piecewise_linear(
-            magnitude, THROTTLE_KNOTS, tuple(curve)
-        )
+        table = self._true_left_table if wheel == "left" else self._true_right_table
+        return sign * self.max_wheel_speed_mm_s * _table_value(magnitude, table)
 
 
 @dataclass(frozen=True)
@@ -375,6 +438,9 @@ class SimCube:
     alpha: float                    # true orientation, full unwrapped angle, radians
     in_play: bool = True
     touched_by: dict = field(default_factory=dict)   # rover_id -> last-touch sim time
+    # Cumulative cube-centre displacement (mm) while each rover was both in
+    # direct contact and assigned this cube.  Touches alone never earn credit.
+    engaged_displacement: dict = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -409,6 +475,7 @@ class PhysicsWorld:
         self._cube_out = {c.color: False for c in cubes}
         self._collision_active: set[tuple[int, int]] = set()
         self._contact_active: set[tuple[int, str]] = set()
+        self._direct_contact_active: set[tuple[int, str]] = set()
         self._rover_load: dict[int, int] = {r.id: 0 for r in rovers}
 
     # ------------------------------------------------------------ commands --
@@ -463,8 +530,9 @@ class PhysicsWorld:
                 self._advance_rover(r, h)
             self.t = segment_end
             self._resolve_rover_rover(prev)
+            cube_before = {color: (c.x, c.y) for color, c in self.cubes.items()}
             touched = self._resolve_contacts()
-            self._update_contact_records(touched)
+            self._update_contact_records(touched, cube_before)
             self._check_board_bounds()
 
     # --------------------------------------------------------- rover motion --
@@ -514,6 +582,11 @@ class PhysicsWorld:
                 pair = (ids[i], ids[j])
                 Ea = self.footprint.envelope(a.x, a.y, a.theta)
                 Eb = self.footprint.envelope(b.x, b.y, b.theta)
+                if (Ea[:, 0].max() < Eb[:, 0].min() or Eb[:, 0].max() < Ea[:, 0].min()
+                        or Ea[:, 1].max() < Eb[:, 1].min() or Eb[:, 1].max() < Ea[:, 1].min()):
+                    if pair in self._collision_active and S.distance(Ea, Eb) < 1.0:
+                        new_active.add(pair)
+                    continue
                 if not S.overlap(Ea, Eb):
                     # Rejected opposing commands can leave a sub-millimetre
                     # gap for one integration step.  Keep one collision
@@ -569,25 +642,39 @@ class PhysicsWorld:
         being pushed through a stationary rover.
         """
         side = self.cfg.cube.side
-        rover_parts: dict[int, list[list[Pt]]] = {}
+        rover_parts: dict[int, list[tuple[list[Pt], tuple[float, float, float, float]]]] = {}
         for rid in sorted(self.rovers):
             r = self.rovers[rid]
-            rover_parts[rid] = [_pts(part) for part in self.footprint.parts(r.x, r.y, r.theta)]
+            rover_parts[rid] = []
+            for part in self.footprint.parts(r.x, r.y, r.theta):
+                points = _pts(part)
+                rover_parts[rid].append((points, _bbox(points)))
 
         colors = sorted(self.cubes)
         sources: dict[str, set[int]] = {color: set() for color in colors}
-        max_sweeps = max(16, self.contact.iterations * 8)
+        direct_contacts: set[tuple[int, str]] = set()
+        # Four default Gauss-Seidel iterations are enough for ordinary
+        # contact chains; retain a bounded extra pass budget for rotated
+        # corners without paying 32 sweeps on every sustained contact.
+        max_sweeps = max(8, self.contact.iterations * 4)
         for _ in range(max_sweeps):
             max_depth = 0.0
+            cube_polys = {
+                color: _square_pts(self.cubes[color].x, self.cubes[color].y, side,
+                                   self.cubes[color].alpha)
+                for color in colors if self.cubes[color].in_play
+            }
+            cube_boxes = {color: _bbox(poly) for color, poly in cube_polys.items()}
             for rid in sorted(rover_parts):
                 parts = rover_parts[rid]
                 for color in colors:
                     cube = self.cubes[color]
                     if not cube.in_play:
                         continue
-                    for part in parts:
-                        cube_poly = _square_pts(cube.x, cube.y, side, cube.alpha)
-                        if not _bbox_overlap(part, cube_poly):
+                    cube_poly = cube_polys[color]
+                    cube_box = cube_boxes[color]
+                    for part, part_box in parts:
+                        if not _bbox_overlap_cached(part_box, cube_box):
                             continue
                         depth, n, p = _sat_contact(part, cube_poly)
                         if depth is None or depth < 1e-9:
@@ -601,7 +688,12 @@ class PhysicsWorld:
                             continue
                         max_depth = max(max_depth, depth)
                         sources[color].add(rid)
+                        direct_contacts.add((rid, color))
                         self._apply_twist(cube, p, n, depth, separate=True)
+                        cube_poly = _square_pts(cube.x, cube.y, side, cube.alpha)
+                        cube_box = _bbox(cube_poly)
+                        cube_polys[color] = cube_poly
+                        cube_boxes[color] = cube_box
 
             # Stable colour order is intentional: insertion order must not
             # decide which member of a cube chain gets left penetrating.
@@ -658,6 +750,7 @@ class PhysicsWorld:
             rid: sum(rid in source for source in sources.values())
             for rid in self.rovers
         }
+        self._direct_contact_active = direct_contacts
         return {(rid, color) for color, rids in sources.items() for rid in rids}
 
     # Kept as a narrow compatibility alias for diagnostics that used the old
@@ -665,7 +758,8 @@ class PhysicsWorld:
     def _resolve_rover_cube(self) -> set[tuple[int, str]]:
         return self._resolve_contacts()
 
-    def _update_contact_records(self, touched: set[tuple[int, str]]) -> None:
+    def _update_contact_records(self, touched: set[tuple[int, str]],
+                                cube_before: dict[str, tuple[float, float]]) -> None:
         for rid, color in touched:
             self.cubes[color].touched_by[rid] = self.t
             pair = (rid, color)
@@ -673,6 +767,16 @@ class PhysicsWorld:
                 if self.targets.get(rid) != color:
                     self.events.append(Event("non_target_contact", self.t, {"rover": rid, "cube": color}))
                     self.counts["non_target_contact"] += 1
+        for rid, color in self._direct_contact_active:
+            if self.targets.get(rid) != color:
+                continue
+            before_x, before_y = cube_before[color]
+            cube = self.cubes[color]
+            displacement = math.hypot(cube.x - before_x, cube.y - before_y)
+            if displacement > 0.0:
+                cube.engaged_displacement[rid] = (
+                    cube.engaged_displacement.get(rid, 0.0) + displacement
+                )
         self._contact_active = touched
 
     # ------------------------------------------------------------- bounds --
@@ -683,7 +787,7 @@ class PhysicsWorld:
         phys = b.physical_margin_mm
         for rid, r in self.rovers.items():
             env = _pts(self.footprint.envelope(r.x, r.y, r.theta))
-            inside = S.inside_rect(np.array(env), -over, W + over, -over, H + over)
+            inside = _inside_rect(env, -over, W + over, -over, H + over)
             if not inside and not self._rover_out[rid]:
                 self.events.append(Event("rover_exit", self.t, {"rover": rid}))
                 self.counts["rover_exit"] += 1
@@ -701,12 +805,7 @@ class PhysicsWorld:
             if not inside and not self._cube_out[color]:
                 self.events.append(Event("cube_exit", self.t, {"cube": color}))
                 self.counts["cube_exit"] += 1
-            self._cube_out[color] = not inside
-            # The physical margin is the recoverable floor around the scored
-            # field.  Once the entire cube has left it, it has fallen and must
-            # not remain a movable/observable success candidate.
-            physical_inside = S.inside_rect(poly, -phys, W + phys, -phys, H + phys)
-            if not physical_inside:
+                self._cube_out[color] = True
+                # The field boundary is irreversible for cubes.  Do not use
+                # the larger physical-board margin as a recoverable play area.
                 c.in_play = False
-                if not self._cube_out[color]:
-                    self._cube_out[color] = True

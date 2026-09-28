@@ -197,6 +197,24 @@ def test_never_detected_occluded_cube_does_not_leak_truth():
     assert msg["cubes"] == [], "unseen cube was initialized from ground truth"
 
 
+def test_sensor_withholds_telemetry_until_first_four_marker_homography():
+    w = world(cubes=[SimCube("red", 30, 30, 0), SimCube("blue", 830, 830, 0)])
+    e = emulator()
+    e.set_phase("RUNNING")
+    e.capture(w, 0.0)
+    assert e.poll(0.0) == []
+    assert e._latest_state is None
+    w.cubes["red"].x, w.cubes["red"].y = 300, 300
+    w.cubes["blue"].x, w.cubes["blue"].y = 500, 500
+    e.capture(w, 0.1)
+    assert e._latest_state is not None
+
+
+def test_sensor_defaults_match_official_capture_and_publication_clocks():
+    assert SensorParams().capture_hz == pytest.approx(30.0)
+    assert SensorParams().publish_hz == pytest.approx(20.0)
+
+
 def test_latest_value_wins_for_a_slow_consumer():
     e, w = emulator(), world()
     for t in (0.0, 0.05, 0.10, 0.15, 0.20):
@@ -257,9 +275,10 @@ def test_cached_observation_age_is_independent_of_transport_latency():
     first, = e.poll(0.2)
     second, = e.poll(0.25)
     assert first["rovers"][0]["age_ms"] == 0
-    assert second["rovers"][0]["age_ms"] == 50
+    # The official capture clock is 30 Hz, independent of 20 Hz publication.
+    assert second["rovers"][0]["age_ms"] == 33
     assert second["rovers"][0]["col"] == first["rovers"][0]["col"]
-    assert second["ts_ms"] == 50
+    assert second["ts_ms"] == 33
 
 
 def install_actor(monkeypatch, w, *, busy=False, speed=0.0, counters=None):
@@ -309,6 +328,23 @@ def test_success_requires_both_rovers_to_have_participated(monkeypatch):
     assert res.outcome != "success", "H5 violated: rover 11 never transported any cube"
 
 
+def test_participation_requires_engaged_displacement_not_touch_history():
+    w = delivered_scene()
+    w.cubes["red"].touched_by = {10: 0.0, 11: 1.0}
+    transported, deposited = runner._participation(
+        w, {"red": True, "blue": True}
+    )
+    assert transported == {10: 0, 11: 0}
+    assert deposited == {10: 0, 11: 0}
+
+    w.cubes["red"].engaged_displacement = {10: 29.9, 11: 30.0}
+    transported, deposited = runner._participation(
+        w, {"red": True, "blue": True}
+    )
+    assert transported[10] == 0 and deposited[10] == 0
+    assert transported[11] == 1 and deposited[11] == 1
+
+
 def test_cube_exit_history_prevents_clean_success(monkeypatch):
     w = delivered_scene()
     w.cubes["blue"].touched_by = {11: 0.0}
@@ -316,6 +352,22 @@ def test_cube_exit_history_prevents_clean_success(monkeypatch):
     sc = install_actor(monkeypatch, w)
     res = runner.run_scenario(sc, max_time=0.1)
     assert res.outcome != "success", "an exited-and-returned cube is scored as clean success"
+
+
+def test_cube_exit_is_irreversible_even_if_truth_position_returns_inside():
+    c = SimCube("red", C.board.width + 1.0, 430, 0)
+    w = world(cubes=[c])
+    w.step(0.01)
+    c.x = C.board.width / 2.0
+    w.step(0.01)
+    assert not c.in_play
+
+
+def test_planner_reason_drives_planner_rejected_class():
+    res = runner.RunResult(1, "test", n_cubes=2, delivered=0)
+    sup = SimpleNamespace(events=[], counters={})
+    assert runner.classify(res, sup, 1.0, 10.0, 0.0, 10.0,
+                           planner_reason="no feasible push") == "planner_rejected"
 
 
 def test_completion_waits_for_motor_stop_and_delivery_stability(monkeypatch):

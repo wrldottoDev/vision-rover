@@ -42,8 +42,8 @@ def _still_motor(**kw) -> MotorParams:
 
 def test_flat_plate_push_aligns_rotated_cube():
     rng = np.random.default_rng(0)
-    rover = SimRover(id=10, x=0.0, y=0.0, theta=0.0, motor=_still_motor())
-    cube = SimCube(color="red", x=200.0, y=0.0, alpha=math.radians(30.0))
+    rover = SimRover(id=10, x=0.0, y=100.0, theta=0.0, motor=_still_motor())
+    cube = SimCube(color="red", x=200.0, y=100.0, alpha=math.radians(30.0))
     world = PhysicsWorld(C, [rover], [cube], ContactParams(), rng)
     world.set_target(10, "red")
     cmd = WheelCommand(70.0, 70.0)
@@ -120,8 +120,8 @@ def test_deep_initial_overlap_does_not_explode():
 
 def test_cube_in_channel_moves_with_rover_and_reversing_leaves_it():
     rng = np.random.default_rng(0)
-    rover = SimRover(id=10, x=0.0, y=0.0, theta=0.0, motor=_still_motor())
-    cube = SimCube(color="red", x=C.contact_distance, y=0.0, alpha=0.0)
+    rover = SimRover(id=10, x=0.0, y=100.0, theta=0.0, motor=_still_motor())
+    cube = SimCube(color="red", x=C.contact_distance, y=100.0, alpha=0.0)
     world = PhysicsWorld(C, [rover], [cube], ContactParams(), rng)
     world.set_target(10, "red")
     dt = 0.01
@@ -191,8 +191,8 @@ def test_cube_exit_event():
 
 def test_non_target_contact_counted():
     rng = np.random.default_rng(0)
-    r = SimRover(id=10, x=0.0, y=0.0, theta=0.0, motor=_still_motor())
-    cube = SimCube("blue", 200.0, 0.0, 0.0)   # rover targets 'red', touches 'blue'
+    r = SimRover(id=10, x=0.0, y=100.0, theta=0.0, motor=_still_motor())
+    cube = SimCube("blue", 200.0, 100.0, 0.0)   # rover targets 'red', touches 'blue'
     world = PhysicsWorld(C, [r], [cube], ContactParams(), rng)
     world.set_target(10, "red")
     cmd = WheelCommand(60.0, 60.0)
@@ -257,14 +257,22 @@ def test_sensor_occlusion_freezes_position_and_grows_age():
     cube = SimCube("red", 400.0, 400.0, 0.0)   # fully inside the chassis body rect
     world = PhysicsWorld(C, [r], [cube], ContactParams(), rng_phys)   # never step(): keep this exact state
     depots = {"red": (40.5, 40.5), "green": (40.5, 2.5), "blue": (2.5, 40.5)}
-    sp = SensorParams(rover_loss_prob=0.0, rover_loss_burst_prob=0.0, frame_drop_prob=0.0, outlier_prob=0.0)
+    sp = SensorParams(rover_loss_prob=0.0, rover_loss_burst_prob=0.0, frame_drop_prob=0.0,
+                      outlier_prob=0.0, latency_mean_s=0.0, latency_jitter_s=0.0,
+                      cube_pos_noise_std_mm=0.0, cube_pos_bias_mm=0.0)
     emu = VisionEmulator(sp, np.random.default_rng(1), depots, (2.5, 2.5))
     emu.set_phase("RUNNING")
     frac, _ = emu._coverage(cube, world)
     assert frac > 0.99   # fully covered by the body rect
 
+    # A stale track is only available after one real detection.  Establish it
+    # from an unobscured capture, then move the rover over the cube.
+    r.x = 300.0
+    emu.capture(world, 0.0)
+    emu.poll(0.0)
+    r.x = 400.0
     last = None
-    for t in (0.0, 0.05, 0.1, 0.2, 0.4, 0.8, 1.2):
+    for t in (0.05, 0.1, 0.2, 0.4, 0.8, 1.2):
         emu.capture(world, t)
         for m in emu.poll(t):
             last = m
@@ -279,19 +287,26 @@ def test_sensor_rover_loss_burst_grows_age_and_recovers():
     which was frozen mid-burst, drops back to ~0 once the burst window elapses."""
     rng_sensor = np.random.default_rng(7)
     motor = MotorParams()
-    r = SimRover(id=10, x=100.0, y=100.0, theta=0.0, motor=motor)
+    r = SimRover(id=10, x=400.0, y=400.0, theta=0.0, motor=motor)
     world = PhysicsWorld(C, [r], [], ContactParams(), np.random.default_rng(0))
     depots = {"red": (40.5, 40.5), "green": (40.5, 2.5), "blue": (2.5, 40.5)}
     emu = VisionEmulator(
-        SensorParams(rover_loss_prob=0.0, rover_loss_burst_prob=1.0, rover_loss_burst_s=0.5,
-                     frame_drop_prob=0.0, outlier_prob=0.0),
+        SensorParams(rover_loss_prob=0.0, rover_loss_burst_prob=0.0, rover_loss_burst_s=0.5,
+                     frame_drop_prob=0.0, outlier_prob=0.0,
+                     latency_mean_s=0.0, latency_jitter_s=0.0),
         rng_sensor, depots, (2.5, 2.5),
     )
     emu.set_phase("RUNNING")
+    emu.capture(world, 0.0)    # establish the initial real track
+    emu.poll(0.0)
+    emu.params = SensorParams(rover_loss_prob=0.0, rover_loss_burst_prob=1.0,
+                              rover_loss_burst_s=0.5, frame_drop_prob=0.0,
+                              outlier_prob=0.0, latency_mean_s=0.0,
+                              latency_jitter_s=0.0)
     emu.capture(world, 0.05)   # guaranteed to start a burst (prob=1.0)
     (m0,) = emu.poll(0.05)
     age0 = next(x for x in m0["rovers"] if x["id"] == 10)["age_ms"]
-    assert age0 == 0            # still the very first sample, nothing to be old yet
+    assert age0 > 0             # the 30 Hz capture clock has advanced since t=0
 
     emu.params = SensorParams(rover_loss_prob=0.0, rover_loss_burst_prob=0.0,
                                frame_drop_prob=0.0, outlier_prob=0.0)
@@ -300,7 +315,7 @@ def test_sensor_rover_loss_burst_grows_age_and_recovers():
         emu.capture(world, t)
         for m in emu.poll(t):
             ages.append(next(x for x in m["rovers"] if x["id"] == 10)["age_ms"])
-    assert max(ages) > 300         # burst kept it stale for a while
+    assert max(ages) > 100         # burst kept it stale for a while
     assert ages[-1] == 0           # ... and it recovered once the burst window passed
 
 

@@ -3,6 +3,7 @@ wheel commands -> physics.  Outcome judged from GROUND TRUTH, never from the str
 from __future__ import annotations
 
 import math
+import inspect
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -18,6 +19,7 @@ PHYS_DT = 0.01
 CONTROL_DT = 0.05
 SETTLING_INTERVAL_S = 1.0
 WHEEL_STOP_TOLERANCE_MM_S = 1.0
+MIN_ENGAGED_PUSH_MM = 30.0
 
 
 @dataclass
@@ -70,24 +72,23 @@ def truth_delivered(world, depots: dict[str, DepotZone], cfg: Config) -> dict[st
 
 
 def _participation(world, delivered: dict[str, bool]) -> tuple[dict[int, int], dict[int, int]]:
-    """Attribute completed cube transport from immutable simulator contact history.
+    """Attribute meaningful transport from ground-truth engaged displacement.
 
-    A rover gets transport credit when it has any ground-truth contact with an in-play
-    cube.  Deposit credit goes to the rover with the latest contact timestamp for a
-    delivered cube; this prevents two rovers that merely touched one cube from both
-    receiving deposit credit.
+    Contact history is retained for diagnostics, but it is intentionally not
+    sufficient for participation.  Each credit requires at least 30 mm of
+    direct cube displacement while that rover's task target was the cube; the
+    delivery side requires the same threshold and a currently valid delivery.
     """
     transported: dict[int, int] = {rid: 0 for rid in world.rovers}
     deposited: dict[int, int] = {rid: 0 for rid in world.rovers}
     for color, is_delivered in delivered.items():
         cube = world.cubes[color]
-        if not cube.in_play or not cube.touched_by:
-            continue
-        contacts = {rid: ts for rid, ts in cube.touched_by.items() if rid in world.rovers}
-        for rid in contacts:
+        engaged = {rid for rid, distance in cube.engaged_displacement.items()
+                   if rid in world.rovers and distance >= MIN_ENGAGED_PUSH_MM}
+        for rid in engaged:
             transported[rid] += 1
-        if is_delivered and contacts:
-            deposited[max(contacts, key=contacts.get)] += 1
+            if is_delivered and cube.in_play:
+                deposited[rid] += 1
     return transported, deposited
 
 
@@ -117,7 +118,16 @@ def run_scenario(sc: SC.Scenario, cfg: Config = DEFAULT, max_time: float = 300.0
     world, emu = SC.instantiate(sc, cfg)
     from ..coordination.supervisor import SupervisorParams
     # deterministic planning in simulation: expansion caps, not wall clock, bound the planners
-    sup = Supervisor(list(world.rovers), cfg, SupervisorParams(nav_deadline_s=30.0, push_deadline_s=3.0))
+    ids = list(world.rovers)
+    params = SupervisorParams(nav_deadline_s=30.0, push_deadline_s=3.0)
+    # The production supervisor accepts deterministic simulation parameters;
+    # keep the narrow test double API (ids, cfg) compatible as well.
+    try:
+        inspect.signature(Supervisor).bind(ids, cfg, params)
+    except TypeError:
+        sup = Supervisor(ids, cfg)
+    else:
+        sup = Supervisor(ids, cfg, params)
     grid_rows = sc.board_rows
     depots = {}
     for color, (col, row) in sc.depots.items():
@@ -331,6 +341,8 @@ def classify(res: RunResult, sup: Supervisor, t: float, max_time: float, last_pr
         return "cube_exit"
     if res.non_target_contacts:
         return "non_target_contact"
+    if planner_reason:
+        return "planner_rejected"
     evs = [e[2] for e in sup.events]
     if res.delivered < res.n_cubes:
         if "no_plan" in evs and res.replans == 0 and res.delivered == 0:

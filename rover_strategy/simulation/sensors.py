@@ -38,6 +38,7 @@ PHASES = ("IDLE", "READY", "RUNNING", "FINISHED")
 @dataclass(frozen=True)
 class SensorParams:
     publish_hz: float = 20.0
+    capture_hz: float = 30.0       # official camera/processing clock
     jitter_std_s: float = 0.004          # ASSUMED: per-frame capture-interval jitter
     latency_mean_s: float = 0.05
     latency_jitter_s: float = 0.02
@@ -74,10 +75,9 @@ class SensorParams:
     # two or more freeze the official state.
     corner_marker_coverage_threshold: float = 0.25
 
-    # `publish_hz` is the publication timer. `capture_hz` is an optional independent
-    # camera/processing timer; None preserves the historical equal-rate default.
+    # `publish_hz` is the publication timer. `capture_hz` is the independent
+    # camera/processing timer used by the official engine.
     latency_profile: str = "default"
-    capture_hz: float | None = None
 
 
 def _projection_factor(p: SensorParams, source_height_mm: float, target_height_mm: float) -> float:
@@ -115,6 +115,7 @@ class VisionEmulator:
         self._rover_state: dict[int, dict] = {}
         self._cube_state: dict[str, dict] = {}
         self._latest_state: dict | None = None
+        self._homography_valid = False
 
     def set_phase(self, phase: str) -> None:
         assert phase in PHASES, phase
@@ -128,7 +129,7 @@ class VisionEmulator:
         before a capture uses the previous slot; the tick at the capture timestamp
         sees the new slot, matching the official processing/publication split.
         """
-        capture_hz = self.params.capture_hz or self.params.publish_hz
+        capture_hz = self.params.capture_hz
         period = 1.0 / capture_hz
         guard = 0
         while t_now >= self._next_capture_t and guard < 1000:
@@ -146,7 +147,14 @@ class VisionEmulator:
         grid = Grid(world.cfg.board.cols, world.cfg.board.rows, world.cfg.board.cell_mm)
         coverages = self._corner_marker_coverages(world)
         covered = sum(frac >= self.params.corner_marker_coverage_threshold for frac in coverages)
-        if covered >= 2 and self._latest_state is not None:
+        if not self._homography_valid:
+            # A saved homography cannot be inferred from one or two visible
+            # corners.  Withhold all telemetry until a clean four-marker
+            # capture establishes the first valid geometry.
+            if covered != 0:
+                return
+            self._homography_valid = True
+        elif covered >= 2:
             # Official freeze: keep the complete last good state, including its
             # capture timestamp and cached object ages.
             return
@@ -191,19 +199,21 @@ class VisionEmulator:
             return  # whole frame lost: the consumer will see a seq gap
         state = self._latest_state
         if state is None:
-            # Before the first good camera state, publish no inferred objects.
-            msg = {"v": 1, "seq": self._seq, "ts_ms": int(round(t_publication * 1000.0)),
-                   "phase": self.phase,
-                   "grid": {"cols": 0, "rows": 0, "cell_mm": 0.0},
-                   "rovers": [], "cubes": [], "obstacles": [],
-                   "start": {"col": self.start_xy[0], "row": self.start_xy[1]},
-                   "depots": [{"color": k, "col": v[0], "row": v[1]} for k, v in self.depots.items()]}
+            # No placeholder grid/objects: the official client must not infer
+            # a homography or object absence before the first valid capture.
+            return
         else:
             msg = dict(state)
             msg["seq"] = self._seq
-        delivery_t = max(t_publication + self._sample_latency(), self._last_delivery_t + 1e-6)
-        self._last_delivery_t = delivery_t
-        self._queue.append((delivery_t, msg))
+        if len(self._queue) >= 2:
+            # Preserve the in-flight item and replace only the pending slot.
+            # Its delivery reservation remains unchanged, so a slow consumer
+            # still receives the newest state at the next available arrival.
+            self._queue[-1] = (self._queue[-1][0], msg)
+        else:
+            delivery_t = max(t_publication + self._sample_latency(), self._last_delivery_t + 1e-6)
+            self._last_delivery_t = delivery_t
+            self._queue.append((delivery_t, msg))
 
     def _sample_marker_offset(self) -> tuple[float, float, float]:
         ang = self.rng.uniform(0.0, 2.0 * math.pi)
