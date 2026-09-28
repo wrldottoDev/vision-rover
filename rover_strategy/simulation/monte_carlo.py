@@ -21,9 +21,12 @@ SAFETY_KEYS = ("rover_rover_collisions", "non_target_contacts", "rover_exits", "
 
 
 def _work(args):
-    seed, family, max_time = args
+    seed, family, max_time, overhang = args
     try:
-        return asdict(run_seed(seed, family, max_time=max_time))
+        from dataclasses import replace
+        from ..config import DEFAULT
+        cfg = replace(DEFAULT, board=replace(DEFAULT.board, overhang_allowance_mm=overhang))
+        return asdict(run_seed(seed, family, max_time=max_time, cfg=cfg))
     except Exception as exc:          # a crash is a finding, never hidden
         import traceback
         return {"seed": seed, "family": family, "outcome": "crash", "failure_class": "software_crash",
@@ -78,10 +81,12 @@ def main(argv=None) -> None:
     ap.add_argument("--max-time", type=float, default=300.0)
     ap.add_argument("--workers", type=int, default=max(1, (os.cpu_count() or 2) - 1))
     ap.add_argument("--out", default="")
+    ap.add_argument("--overhang", type=float, default=0.0,
+                    help="allowed rover overhang beyond the effective field, mm (rules interpretation; default strict 0)")
     a = ap.parse_args(argv)
     seeds = [int(s) for s in a.seeds.split(",")] if a.seeds else list(range(a.start, a.start + a.n))
     t0 = time.time()
-    jobs = [(s, a.family, a.max_time) for s in seeds]
+    jobs = [(s, a.family, a.max_time, a.overhang) for s in seeds]
     if a.workers > 1 and len(jobs) > 1:
         with ProcessPoolExecutor(a.workers) as ex:
             results = list(ex.map(_work, jobs, chunksize=4))
@@ -90,6 +95,7 @@ def main(argv=None) -> None:
     agg = aggregate(results)
     agg["wall_s"] = round(time.time() - t0, 1)
     agg["family"] = a.family
+    agg["overhang_mm"] = a.overhang
     print(json.dumps(agg, indent=1))
     fails = [r for r in results if r.get("outcome") != "success"]
     for r in fails[:40]:
