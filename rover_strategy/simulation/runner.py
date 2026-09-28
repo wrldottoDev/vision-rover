@@ -11,10 +11,13 @@ from ..config import Config, DEFAULT
 from ..coordination.supervisor import Supervisor
 from ..geometry.zones import DepotZone
 from ..vision.parser import TelemetryError, parse_message
+from ..world import STOP
 from . import scenarios as SC
 
 PHYS_DT = 0.01
 CONTROL_DT = 0.05
+SETTLING_INTERVAL_S = 1.0
+WHEEL_STOP_TOLERANCE_MM_S = 1.0
 
 
 @dataclass
@@ -26,7 +29,9 @@ class RunResult:
     detail: str = ""
     n_cubes: int = 0
     delivered: int = 0
-    completion_time: float | None = None
+    delivery_time: float | None = None       # first time every cube is truth-valid
+    completion_time: float | None = None       # settled completion, for compatibility
+    settled_completion_time: float | None = None
     sim_time: float = 0.0
     rover_rover_collisions: int = 0
     non_target_contacts: int = 0
@@ -34,6 +39,9 @@ class RunResult:
     falls: int = 0
     cube_exits: int = 0
     deadlocks: int = 0
+    rover_transport_counts: dict[int, int] = field(default_factory=dict)
+    rover_delivery_counts: dict[int, int] = field(default_factory=dict)
+    participating_rovers: list[int] = field(default_factory=list)
     delivery_undone: int = 0
     replans: int = 0
     recoveries: int = 0
@@ -43,6 +51,12 @@ class RunResult:
     est_heading_rmse_deg: float | None = None
     push_cross_track_p95: float | None = None
     max_occlusion_s: float | None = None
+    collision_duration_s: float = 0.0
+    non_target_contact_duration_s: float = 0.0
+    max_collision_duration_s: float = 0.0
+    max_non_target_contact_duration_s: float = 0.0
+    planner_rejection: str = ""
+    physical_infeasibility: str = ""
     counters: dict = field(default_factory=dict)
     last_events: list = field(default_factory=list)
 
@@ -51,8 +65,51 @@ def truth_delivered(world, depots: dict[str, DepotZone], cfg: Config) -> dict[st
     out = {}
     for color, c in world.cubes.items():
         d = depots.get(color)
-        out[color] = bool(d and d.contains_cube(c.x, c.y, cfg.cube.side, c.alpha, 0.0))
+        out[color] = bool(c.in_play and d and d.contains_cube(c.x, c.y, cfg.cube.side, c.alpha, 0.0))
     return out
+
+
+def _participation(world, delivered: dict[str, bool]) -> tuple[dict[int, int], dict[int, int]]:
+    """Attribute completed cube transport from immutable simulator contact history.
+
+    A rover gets transport credit when it has any ground-truth contact with an in-play
+    cube.  Deposit credit goes to the rover with the latest contact timestamp for a
+    delivered cube; this prevents two rovers that merely touched one cube from both
+    receiving deposit credit.
+    """
+    transported: dict[int, int] = {rid: 0 for rid in world.rovers}
+    deposited: dict[int, int] = {rid: 0 for rid in world.rovers}
+    for color, is_delivered in delivered.items():
+        cube = world.cubes[color]
+        if not cube.in_play or not cube.touched_by:
+            continue
+        contacts = {rid: ts for rid, ts in cube.touched_by.items() if rid in world.rovers}
+        for rid in contacts:
+            transported[rid] += 1
+        if is_delivered and contacts:
+            deposited[max(contacts, key=contacts.get)] += 1
+    return transported, deposited
+
+
+def _all_rovers_stopped(world) -> bool:
+    """Truth-side stop condition: actual wheel speeds and command queue are idle."""
+    return all(
+        abs(r.wl) <= WHEEL_STOP_TOLERANCE_MM_S and
+        abs(r.wr) <= WHEEL_STOP_TOLERANCE_MM_S and
+        not r.pending and abs(r.cmd_left) <= WHEEL_STOP_TOLERANCE_MM_S and
+        abs(r.cmd_right) <= WHEEL_STOP_TOLERANCE_MM_S
+        for r in world.rovers.values()
+    )
+
+
+def _request_truth_stop(world) -> None:
+    """Queue STOP once per rover while allowing motor latency/coast-down to elapse."""
+    for rid, rover in world.rovers.items():
+        if rover.pending or abs(rover.cmd_left) > WHEEL_STOP_TOLERANCE_MM_S \
+                or abs(rover.cmd_right) > WHEEL_STOP_TOLERANCE_MM_S \
+                or abs(rover.wl) > WHEEL_STOP_TOLERANCE_MM_S \
+                or abs(rover.wr) > WHEEL_STOP_TOLERANCE_MM_S:
+            world.set_command(rid, STOP, world.t)
 
 
 def run_scenario(sc: SC.Scenario, cfg: Config = DEFAULT, max_time: float = 300.0,
@@ -66,18 +123,56 @@ def run_scenario(sc: SC.Scenario, cfg: Config = DEFAULT, max_time: float = 300.0
     for color, (col, row) in sc.depots.items():
         depots[color] = DepotZone(color, col * sc.cell_mm, (grid_rows - row) * sc.cell_mm, cfg.depot.half_size)
     res = RunResult(seed=sc.seed, family=sc.family, n_cubes=len(world.cubes))
-    infeasible = infeasibility(world, depots, cfg)
+    physical_reason = infeasibility(world, depots, cfg)
+    planner_reason = planner_rejection(world, depots, cfg)
+    res.physical_infeasibility = physical_reason
+    res.planner_rejection = planner_reason
     emu.set_phase("RUNNING")
     next_ctrl = 0.0
     err_p, err_h = [], []
     was_in: dict[str, bool] = {c: False for c in world.cubes}
-    last_progress_t, best = 0.0, -1
+    last_progress_t = 0.0
+    previous_cube_pose = {c: world.cube_pose(c) for c in world.cubes}
+    delivery_valid_since: float | None = None
+    delivery_participation: tuple[dict[int, int], dict[int, int]] | None = None
+    stop_requested = False
+    duration = {"collision": 0.0, "non_target_contact": 0.0}
+    total_duration = {"collision": 0.0, "non_target_contact": 0.0}
+    max_duration = {"collision": 0.0, "non_target_contact": 0.0}
     cube_last_seen = {c: 0.0 for c in world.cubes}
     max_occ = 0.0
     t = 0.0
     while t < max_time:
         world.step(PHYS_DT)
         t = world.t
+        active_collision = bool(getattr(world, "_collision_active", ()))
+        active_non_target = any(
+            world.targets.get(rid) != color
+            for rid, color in getattr(world, "_contact_active", ())
+        )
+        for key, active in (("collision", active_collision), ("non_target_contact", active_non_target)):
+            if active:
+                duration[key] += PHYS_DT
+                total_duration[key] += PHYS_DT
+            else:
+                duration[key] = 0.0
+            max_duration[key] = max(max_duration[key], duration[key])
+        truth_now = truth_delivered(world, depots, cfg)
+        for color, ok in truth_now.items():
+            if was_in[color] and not ok:
+                res.delivery_undone += 1
+            was_in[color] = ok
+        if all(truth_now.values()) and truth_now:
+            if delivery_valid_since is None:
+                delivery_valid_since = t
+                if res.delivery_time is None:
+                    res.delivery_time = t
+                delivery_participation = _participation(world, truth_now)
+            if not stop_requested:
+                _request_truth_stop(world)
+                stop_requested = True
+        else:
+            delivery_valid_since = None
         emu.capture(world, t)
         for msg in emu.poll(t):
             try:
@@ -90,7 +185,7 @@ def run_scenario(sc: SC.Scenario, cfg: Config = DEFAULT, max_time: float = 300.0
                     cube_last_seen[color] = t
         if t + 1e-9 >= next_ctrl:
             next_ctrl += CONTROL_DT
-            cmds = sup.tick(t)
+            cmds = {} if stop_requested else sup.tick(t)
             for rid, wc in cmds.items():
                 world.set_command(rid, wc, t)
                 ag = sup.agents[rid]
@@ -104,21 +199,35 @@ def run_scenario(sc: SC.Scenario, cfg: Config = DEFAULT, max_time: float = 300.0
                     err_h.append(abs(math.remainder(e.pose.theta - th, 2 * math.pi)))
             for c in world.cubes:
                 max_occ = max(max_occ, t - cube_last_seen[c])
-            dl = truth_delivered(world, depots, cfg)
-            for c, ok in dl.items():
-                if was_in[c] and not ok:
-                    res.delivery_undone += 1
-                was_in[c] = ok
+            dl = truth_now
             n_ok = sum(dl.values())
-            if n_ok > best:
-                best, last_progress_t = n_ok, t
+
+            # Count actual cube motion as useful task progress.  A mission can need
+            # intermediate pushes away from a depot, so depot-count increments alone
+            # are not a valid stall signal.
+            task_colors = {
+                a.task.color for a in sup.agents.values()
+                if a.task is not None and a.engaged
+            }
+            moved = False
+            for color, pose in ((c, world.cube_pose(c)) for c in world.cubes):
+                old = previous_cube_pose[color]
+                if color in task_colors and (
+                        math.hypot(pose[0] - old[0], pose[1] - old[1]) > 0.5 \
+                        or abs(pose[2] - old[2]) > math.radians(0.5)
+                ):
+                    moved = True
+                previous_cube_pose[color] = pose
+            if moved or n_ok == len(world.cubes):
+                last_progress_t = t
             if record is not None:
                 record.append((t, {r: world.rover_pose(r) for r in world.rovers},
                                {c: world.cube_pose(c) for c in world.cubes},
                                {r: sup.agents[r].state.value for r in world.rovers}))
-            if n_ok == len(world.cubes) and all(a.task is None for a in sup.agents.values()) \
-                    and all(not a.engaged for a in sup.agents.values()):
-                res.completion_time = t
+            if n_ok == len(world.cubes) and delivery_valid_since is not None \
+                    and t - delivery_valid_since >= SETTLING_INTERVAL_S \
+                    and _all_rovers_stopped(world):
+                res.settled_completion_time = t
                 break
             if world.counts.get("rover_fell", 0):
                 break
@@ -126,6 +235,13 @@ def run_scenario(sc: SC.Scenario, cfg: Config = DEFAULT, max_time: float = 300.0
                 break
     dl = truth_delivered(world, depots, cfg)
     res.delivered = sum(dl.values())
+    transported, deposited = delivery_participation or _participation(world, dl)
+    res.rover_transport_counts = transported
+    res.rover_delivery_counts = deposited
+    res.participating_rovers = sorted(
+        rid for rid in world.rovers
+        if transported.get(rid, 0) >= 1 and deposited.get(rid, 0) >= 1
+    )
     res.sim_time = round(t, 2)
     wc = world.counts
     res.rover_rover_collisions = wc.get("collision", 0)
@@ -143,45 +259,82 @@ def run_scenario(sc: SC.Scenario, cfg: Config = DEFAULT, max_time: float = 300.0
     res.est_pos_rmse = float(np.sqrt(np.mean(np.square(err_p)))) if err_p else None
     res.est_heading_rmse_deg = float(np.degrees(np.sqrt(np.mean(np.square(err_h))))) if err_h else None
     res.max_occlusion_s = round(max_occ, 2)
+    # `duration` is the final active episode; max_duration captures the complete
+    # episode severity while the runner was advancing truth.
+    res.collision_duration_s = round(total_duration["collision"], 2)
+    res.non_target_contact_duration_s = round(total_duration["non_target_contact"], 2)
+    res.max_collision_duration_s = round(max_duration["collision"], 2)
+    res.max_non_target_contact_duration_s = round(max_duration["non_target_contact"], 2)
     res.counters = dict(sup.counters)
     res.last_events = [str(e) for e in sup.events[-25:]]
-    safety = res.rover_rover_collisions or res.falls or res.rover_exits
-    if res.completion_time is not None and not safety and not res.non_target_contacts:
+    safety = res.rover_rover_collisions or res.falls or res.rover_exits or res.cube_exits
+    participation_ok = res.n_cubes < 2 or len(res.participating_rovers) == len(world.rovers)
+    if res.settled_completion_time is not None and participation_ok and not safety and not res.non_target_contacts:
+        res.completion_time = res.settled_completion_time
         res.outcome = "success"
     else:
         res.outcome = "fail"
-        res.failure_class = classify(res, sup, t, max_time, last_progress_t, stall_s)
-        if infeasible and res.failure_class not in ("coordination_collision", "board_exit", "non_target_contact"):
+        res.failure_class = classify(res, sup, t, max_time, last_progress_t, stall_s,
+                                     planner_reason, physical_reason)
+        if res.failure_class == "coordination_deadlock":
+            res.deadlocks = max(1, res.deadlocks)
+        if physical_reason and res.failure_class not in ("coordination_collision", "board_exit",
+                                                         "non_target_contact", "cube_exit"):
             res.failure_class = "physically_infeasible"
-            res.detail = infeasible
+            res.detail = physical_reason
+        elif res.failure_class == "planner_rejected":
+            res.detail = planner_reason or res.detail
     return res
 
 
 def infeasibility(world, depots: dict[str, DepotZone], cfg: Config) -> str:
-    """Ground-truth check (true cube poses) with the push model's necessary conditions."""
+    """Return only independently proven physical impossibility.
+
+    Planner clearance/corridor checks are conservative model decisions, not proofs
+    about the simulator's ground-truth contact dynamics, and therefore belong in
+    :func:`planner_rejection` instead.
+    """
+    for color, cube in world.cubes.items():
+        if color not in depots:
+            return f"cube '{color}' has no depot"
+        if not cube.in_play:
+            return f"cube '{color}' starts out of play"
+        if depots[color].half < cfg.cube.side / 2.0:
+            return (f"depot '{color}' half-size {depots[color].half:.1f} mm is smaller than "
+                    f"the cube half-side {cfg.cube.side / 2.0:.1f} mm")
+    return ""
+
+
+def planner_rejection(world, depots: dict[str, DepotZone], cfg: Config) -> str:
+    """Return the planner's conservative rejection reason, without calling it physical."""
     from ..planning.push_planner import classify_unsolvable
     from ..world import CubeEstimate
-    cubes = {c: CubeEstimate(c, cb.x, cb.y, pos_std=0.5) for c, cb in world.cubes.items()}
+
+    cubes = {c: CubeEstimate(c, cb.x, cb.y, pos_std=0.5)
+             for c, cb in world.cubes.items() if cb.in_play and c in depots}
     W, H = cfg.board.width, cfg.board.height
-    for c, ce in cubes.items():
-        why = classify_unsolvable(cfg, ce, depots[c], [o for k, o in cubes.items() if k != c], W, H)
+    for color, cube in cubes.items():
+        why = classify_unsolvable(cfg, cube, depots[color],
+                                  [o for k, o in cubes.items() if k != color], W, H)
         if why:
             return why
     return ""
 
 
 def classify(res: RunResult, sup: Supervisor, t: float, max_time: float, last_progress_t: float,
-             stall_s: float) -> str:
+             stall_s: float, planner_reason: str = "", physical_reason: str = "") -> str:
     if res.rover_rover_collisions:
         return "coordination_collision"
     if res.falls or res.rover_exits:
         return "board_exit"
-    if res.non_target_contacts and res.completion_time is not None:
+    if res.cube_exits:
+        return "cube_exit"
+    if res.non_target_contacts:
         return "non_target_contact"
     evs = [e[2] for e in sup.events]
     if res.delivered < res.n_cubes:
         if "no_plan" in evs and res.replans == 0 and res.delivered == 0:
-            return "planner_no_solution"
+            return "planner_rejected"
         if sup.counters.get("waiting_all_rovers", 0) > 100 or (res.est_pos_rmse or 0) > 15:
             return "perception_estimation"
         if res.capture_failures >= 3:
@@ -191,6 +344,8 @@ def classify(res: RunResult, sup: Supervisor, t: float, max_time: float, last_pr
         if t - last_progress_t > stall_s:
             return "stall"
         return "timeout"
+    if res.n_cubes >= 2 and len(res.participating_rovers) < len(res.rover_transport_counts):
+        return "participation"
     if res.non_target_contacts:
         return "non_target_contact"
     return "unclassified"

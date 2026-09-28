@@ -1,8 +1,8 @@
 """Vision emulator: publishes official contract-v1 telemetry dicts from a PhysicsWorld.
 
-Modelled pathologies (per CONTRATO.md s2/s6 and the lead brief): capture->delivery
-latency (mean + jitter, sampled per published frame, monotonic so a single ordered
-TCP-like channel never reorders messages), whole dropped frames (creates the seq
+Modelled pathologies (per CONTRATO.md s2/s6 and the lead brief): independent
+capture/publication clocks and capture->delivery latency (mean + jitter or an optional
+heavy-tailed profile; the ordered TCP-like channel never reorders messages), whole dropped frames (creates the seq
 gaps the contract says are normal), per-rover detection loss (steady-state prob +
 occasional ~1 s bursts) with last-known pose + growing `age_ms`, a fixed (unknown to
 the strategy) marker->rotation-centre offset per rover, Gaussian rover pose noise
@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import math
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import numpy as np
 
@@ -60,6 +60,7 @@ class SensorParams:
 
     camera_height_mm: float = 2100.0     # MEASURED-ish (interpretation_v0 default rig height)
     rover_height_mm: float = 90.0        # chassis top height above the floor
+    cube_height_mm: float = 60.0         # ASSUMED: cube top plane for rover-shadow projection
     parallax_enabled: bool = True
 
     full_occlusion_frac: float = 0.70    # ASSUMED (lead brief): detector drops the reading above this
@@ -67,11 +68,26 @@ class SensorParams:
     partial_extra_noise_std_mm: float = 2.0
     partial_bias_mm: float = 4.0         # extra bias toward the uncovered side at frac == full threshold
 
+    # ASSUMED detector threshold. The black 100 mm marker plus 20 mm white border
+    # is centred on a field corner; the configured 70 mm in-field quarter is used
+    # for coverage. One covered quarter is tolerated by the saved-homography path;
+    # two or more freeze the official state.
+    corner_marker_coverage_threshold: float = 0.25
 
-def _kappa(p: SensorParams) -> float:
-    h = p.rover_height_mm
+    # `publish_hz` is the publication timer. `capture_hz` is an optional independent
+    # camera/processing timer; None preserves the historical equal-rate default.
+    latency_profile: str = "default"
+    capture_hz: float | None = None
+
+
+def _projection_factor(p: SensorParams, source_height_mm: float, target_height_mm: float) -> float:
+    """Project a top silhouette onto a lower horizontal plane, from a nadir camera."""
+    if not p.parallax_enabled:
+        return 1.0
     H = p.camera_height_mm
-    return H / (H - h) if 0.0 < h < H else 1.0
+    if not 0.0 < source_height_mm < H or target_height_mm >= H:
+        return 1.0
+    return (H - target_height_mm) / (H - source_height_mm)
 
 
 class VisionEmulator:
@@ -93,10 +109,12 @@ class VisionEmulator:
         self.phase = "IDLE"
         self._seq = 0
         self._next_capture_t = 0.0
+        self._next_publication_t = 0.0
         self._last_delivery_t = -1.0
-        self._queue: deque[dict] = deque()
+        self._queue: deque[tuple[float, dict]] = deque()
         self._rover_state: dict[int, dict] = {}
         self._cube_state: dict[str, dict] = {}
+        self._latest_state: dict | None = None
 
     def set_phase(self, phase: str) -> None:
         assert phase in PHASES, phase
@@ -104,28 +122,41 @@ class VisionEmulator:
 
     # ------------------------------------------------------------- capture --
     def capture(self, world: PhysicsWorld, t_now: float) -> None:
-        """Call every physics step; internally paces itself to ~publish_hz (+jitter)."""
-        period = 1.0 / self.params.publish_hz
+        """Advance camera processing to ``t_now``.
+
+        Publication is driven separately by its own timer. A publication tick due
+        before a capture uses the previous slot; the tick at the capture timestamp
+        sees the new slot, matching the official processing/publication split.
+        """
+        capture_hz = self.params.capture_hz or self.params.publish_hz
+        period = 1.0 / capture_hz
         guard = 0
         while t_now >= self._next_capture_t and guard < 1000:
-            self._emit(world, self._next_capture_t)
+            t_capture = self._next_capture_t
+            self._advance_publication(t_capture, inclusive=False)
+            self._capture(world, t_capture)
+            self._advance_publication(t_capture, inclusive=True)
             jitter = self.rng.normal(0.0, self.params.jitter_std_s)
             self._next_capture_t += max(0.2 * period, period + jitter)
             guard += 1
+        self._advance_publication(t_now, inclusive=True)
 
-    def _emit(self, world: PhysicsWorld, t_capture: float) -> None:
-        self._seq += 1
-        if self.rng.random() < self.params.frame_drop_prob:
-            return  # whole frame lost: the consumer will see a seq gap
+    def _capture(self, world: PhysicsWorld, t_capture: float) -> None:
+        """Process one camera frame and replace the latest-state slot if valid."""
         grid = Grid(world.cfg.board.cols, world.cfg.board.rows, world.cfg.board.cell_mm)
-        rovers = [self._capture_rover(rid, r, t_capture, grid) for rid, r in world.rovers.items()]
-        cubes = [
-            self._capture_cube(color, c, t_capture, world, grid)
-            for color, c in world.cubes.items()
-        ]
-        msg = {
+        coverages = self._corner_marker_coverages(world)
+        covered = sum(frac >= self.params.corner_marker_coverage_threshold for frac in coverages)
+        if covered >= 2 and self._latest_state is not None:
+            # Official freeze: keep the complete last good state, including its
+            # capture timestamp and cached object ages.
+            return
+
+        rovers = [obs for rid, r in world.rovers.items()
+                  if (obs := self._capture_rover(rid, r, t_capture, grid)) is not None]
+        cubes = [obs for color, c in world.cubes.items() if c.in_play
+                 and (obs := self._capture_cube(color, c, t_capture, world, grid)) is not None]
+        self._latest_state = {
             "v": 1,
-            "seq": self._seq,
             "ts_ms": int(round(t_capture * 1000.0)),
             "phase": self.phase,
             "grid": {"cols": grid.cols, "rows": grid.rows, "cell_mm": grid.cell_mm},
@@ -135,8 +166,42 @@ class VisionEmulator:
             "start": {"col": self.start_xy[0], "row": self.start_xy[1]},
             "depots": [{"color": k, "col": v[0], "row": v[1]} for k, v in self.depots.items()],
         }
-        latency = max(0.0, self.rng.normal(self.params.latency_mean_s, self.params.latency_jitter_s))
-        delivery_t = max(t_capture + latency, self._last_delivery_t + 1e-6)
+
+    def _advance_publication(self, t_now: float, *, inclusive: bool) -> None:
+        """Run the independent publication timer up to ``t_now``."""
+        period = 1.0 / self.params.publish_hz
+        while (self._next_publication_t < t_now or
+               (inclusive and self._next_publication_t <= t_now)):
+            self._publish(self._next_publication_t)
+            self._next_publication_t += period
+
+    def _sample_latency(self) -> float:
+        if self.params.latency_profile == "realistic_latency":
+            # Lognormal(mu=ln(.16), sigma=.65) has p95 ~= .47 s and a bounded
+            # worst case matching the user-reported ~1.42 s tail.
+            return min(1.42, float(self.rng.lognormal(math.log(0.16), 0.65)))
+        if self.params.latency_profile != "default":
+            raise ValueError(f"unknown latency profile {self.params.latency_profile!r}")
+        return max(0.0, self.rng.normal(self.params.latency_mean_s, self.params.latency_jitter_s))
+
+    def _publish(self, t_publication: float) -> None:
+        """Publish the current slot; seq advances even for a dropped message."""
+        self._seq += 1
+        if self.rng.random() < self.params.frame_drop_prob:
+            return  # whole frame lost: the consumer will see a seq gap
+        state = self._latest_state
+        if state is None:
+            # Before the first good camera state, publish no inferred objects.
+            msg = {"v": 1, "seq": self._seq, "ts_ms": int(round(t_publication * 1000.0)),
+                   "phase": self.phase,
+                   "grid": {"cols": 0, "rows": 0, "cell_mm": 0.0},
+                   "rovers": [], "cubes": [], "obstacles": [],
+                   "start": {"col": self.start_xy[0], "row": self.start_xy[1]},
+                   "depots": [{"color": k, "col": v[0], "row": v[1]} for k, v in self.depots.items()]}
+        else:
+            msg = dict(state)
+            msg["seq"] = self._seq
+        delivery_t = max(t_publication + self._sample_latency(), self._last_delivery_t + 1e-6)
         self._last_delivery_t = delivery_t
         self._queue.append((delivery_t, msg))
 
@@ -148,15 +213,11 @@ class VisionEmulator:
         return fwd, left, dth
 
     def _capture_rover(self, rid: int, r: SimRover, t_capture: float, grid: Grid) -> dict:
-        st = self._rover_state.setdefault(
-            rid,
-            {
-                "last_seen": t_capture,
-                "last_pub": (r.x, r.y, r.theta),
-                "burst_until": -1.0,
-                "offset": self._sample_marker_offset(),
-            },
-        )
+        st = self._rover_state.get(rid)
+        if st is None:
+            st = {"last_seen": t_capture, "last_pub": None,
+                  "burst_until": -1.0, "offset": self._sample_marker_offset()}
+            self._rover_state[rid] = st
         lost = False
         if t_capture < st["burst_until"]:
             lost = True
@@ -178,6 +239,9 @@ class VisionEmulator:
             st["last_pub"] = (mx, my, mth)
             st["last_seen"] = t_capture
 
+        if st["last_pub"] is None:
+            return None
+
         x, y, th = st["last_pub"]
         age_ms = max(0, int(round((t_capture - st["last_seen"]) * 1000.0)))
         col, row = grid.to_official_xy(x, y)
@@ -190,28 +254,23 @@ class VisionEmulator:
         side = world.cfg.cube.side
         cube_poly = _square_pts(c.x, c.y, side, c.alpha)
         area = side * side
-        k = _kappa(self.params)
+        k = _projection_factor(self.params, self.params.rover_height_mm, self.params.cube_height_mm)
         nadir = (world.cfg.board.width / 2.0, world.cfg.board.height / 2.0)
-        best_frac, best_centroid = 0.0, None
+        occluders = []
         for r in world.rovers.values():
             body = world.footprint.parts(r.x, r.y, r.theta)[0]
             body_pts = _pts(body)
-            if self.params.parallax_enabled and k != 1.0:
-                body_pts = [(nadir[0] + k * (x - nadir[0]), nadir[1] + k * (y - nadir[1])) for x, y in body_pts]
-            inter = _clip_convex(cube_poly, body_pts)
-            a = _poly_area(inter)
-            frac = a / area if area > 0 else 0.0
-            if frac > best_frac:
-                best_frac = frac
-                best_centroid = _poly_centroid(inter) if len(inter) >= 3 else None
-        return best_frac, best_centroid
+            occluders.append(self._project(body_pts, nadir, k))
+        inters = [_clip_convex(cube_poly, p) for p in occluders]
+        covered, centroid = _union_area_and_centroid(inters)
+        return covered / area if area > 0 else 0.0, centroid
 
     def _capture_cube(self, color: str, c, t_capture: float, world: PhysicsWorld, grid: Grid) -> dict:
         st = self._cube_state.setdefault(
             color,
             {
                 "last_seen": t_capture,
-                "last_pub": (c.x, c.y),
+                "last_pub": None,
                 "bias": tuple(self.rng.normal(0.0, self.params.cube_pos_bias_mm, size=2)),
             },
         )
@@ -234,6 +293,9 @@ class VisionEmulator:
             st["last_pub"] = (nx, ny)
             st["last_seen"] = t_capture
 
+        if st["last_pub"] is None:
+            return None
+
         x, y = st["last_pub"]
         age_ms = max(0, int(round((t_capture - st["last_seen"]) * 1000.0)))
         col, row = grid.to_official_xy(x, y)
@@ -241,7 +303,79 @@ class VisionEmulator:
 
     # --------------------------------------------------------------- poll --
     def poll(self, t_now: float) -> list[dict]:
-        out = []
+        self._advance_publication(t_now, inclusive=True)
+        ready = []
         while self._queue and self._queue[0][0] <= t_now:
-            out.append(self._queue.popleft()[1])
-        return out
+            ready.append(self._queue.popleft()[1])
+        # The official transport has one bounded latest-value slot per client.
+        # Keep future deliveries (which preserve channel order), but collapse all
+        # currently ready backlog to the newest message.
+        return [ready[-1]] if ready else []
+
+    def _project(self, points, nadir: tuple[float, float], factor: float):
+        nx, ny = nadir
+        return [(nx + factor * (x - nx), ny + factor * (y - ny)) for x, y in points]
+
+    def _corner_marker_coverages(self, world: PhysicsWorld) -> list[float]:
+        """Return union-covered fractions for the four in-field marker quarters."""
+        half = world.cfg.board.corner_marker_half_mm
+        W, H = world.cfg.board.width, world.cfg.board.height
+        corners = ((0.0, 0.0), (W, 0.0), (0.0, H), (W, H))
+        occluders = []
+        for c in world.cubes.values():
+            if c.in_play:
+                poly = self._project(
+                    _square_pts(c.x, c.y, world.cfg.cube.side, c.alpha),
+                    (W / 2.0, H / 2.0),
+                    _projection_factor(self.params, self.params.cube_height_mm, 0.0),
+                )
+                occluders.append(poly)
+        for r in world.rovers.values():
+            for part in world.footprint.parts(r.x, r.y, r.theta):
+                poly = self._project(
+                    _pts(part), (W / 2.0, H / 2.0),
+                    _projection_factor(self.params, self.params.rover_height_mm, 0.0),
+                )
+                occluders.append(poly)
+
+        coverages = []
+        for cx, cy in corners:
+            x0, x1 = (cx, cx + half) if cx == 0.0 else (cx - half, cx)
+            y0, y1 = (cy, cy + half) if cy == 0.0 else (cy - half, cy)
+            region = [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]
+            intersections = [_clip_convex(region, poly) for poly in occluders]
+            covered, _ = _union_area_and_centroid(intersections)
+            coverages.append(min(1.0, max(0.0, covered / (half * half))))
+        return coverages
+
+
+def _union_area_and_centroid(polygons: list[list[tuple[float, float]]]) -> tuple[float, tuple[float, float] | None]:
+    """Exact union for the small convex-polygon sets used by the sensor model."""
+    polygons = [p for p in polygons if len(p) >= 3 and _poly_area(p) > 1e-9]
+    if not polygons:
+        return 0.0, None
+    area = 0.0
+    cx = cy = 0.0
+    # Inclusion-exclusion is compact and robust here: at most three cubes and
+    # three U-shaped rover parts are present, and all intersections stay convex.
+    n = len(polygons)
+    for mask in range(1, 1 << n):
+        inter = polygons[(mask & -mask).bit_length() - 1]
+        bits = mask & (mask - 1)
+        while bits:
+            bit = bits & -bits
+            inter = _clip_convex(inter, polygons[bit.bit_length() - 1])
+            bits -= bit
+            if len(inter) < 3:
+                break
+        a = _poly_area(inter)
+        if a <= 1e-9:
+            continue
+        sign = 1.0 if mask.bit_count() % 2 else -1.0
+        c = _poly_centroid(inter)
+        area += sign * a
+        cx += sign * a * c[0]
+        cy += sign * a * c[1]
+    if area <= 1e-9:
+        return 0.0, None
+    return area, (cx / area, cy / area)

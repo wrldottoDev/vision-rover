@@ -44,21 +44,36 @@ def aggregate(results: list[dict]) -> dict:
     n = len(results)
     ok = [r for r in results if r.get("outcome") == "success"]
     times = [r["completion_time"] for r in ok if r.get("completion_time") is not None]
+    settled_times = [r["settled_completion_time"] for r in results
+                     if r.get("settled_completion_time") is not None]
+    delivery_times = [r["delivery_time"] for r in results if r.get("delivery_time") is not None]
+    three_cube = [r for r in results if r.get("n_cubes") == 3]
     feasible = [r for r in results if r.get("failure_class") != "physically_infeasible"]
     agg = {
         "runs": n,
         "success_rate": len(ok) / n if n else 0.0,
         "success_rate_feasible": (len([r for r in feasible if r.get("outcome") == "success"]) / len(feasible)) if feasible else 0.0,
-        "delivered_3of3_rate": sum(1 for r in results if r.get("delivered", 0) == r.get("n_cubes", -1)) / n if n else 0,
+        # A 2/2 mission is not a 3/3 result.  Stratify the metric by mission size
+        # so mixed scenario families cannot hide the denominator.
+        "delivered_3of3_rate": (sum(1 for r in three_cube if r.get("delivered", 0) == 3) /
+                                 len(three_cube)) if three_cube else 0.0,
+        "three_cube_runs": len(three_cube),
         "mean_delivered": statistics.mean([r.get("delivered", 0) for r in results]) if n else 0,
         "failure_classes": dict(Counter(r.get("failure_class", "none") for r in results if r.get("outcome") != "success")),
+        "planner_rejected_runs": sum(1 for r in results if r.get("failure_class") == "planner_rejected"),
+        "physical_infeasible_runs": sum(1 for r in results if r.get("failure_class") == "physically_infeasible"),
+        "mean_delivery_time": statistics.mean(delivery_times) if delivery_times else None,
+        "median_delivery_time": statistics.median(delivery_times) if delivery_times else None,
+        "mean_settled_completion_time": statistics.mean(settled_times) if settled_times else None,
+        "median_settled_completion_time": statistics.median(settled_times) if settled_times else None,
         "mean_completion_time": statistics.mean(times) if times else None,
         "median_completion_time": statistics.median(times) if times else None,
         "p95_completion_time": pct(times, 0.95),
         "max_completion_time": max(times) if times else None,
     }
     for k in SAFETY_KEYS + ("deadlocks", "delivery_undone", "cube_exits", "replans", "recoveries", "estops",
-                            "capture_failures"):
+                            "capture_failures", "collision_duration_s", "non_target_contact_duration_s",
+                            "max_collision_duration_s", "max_non_target_contact_duration_s"):
         vals = [r.get(k, 0) or 0 for r in results]
         agg[k + "_total"] = sum(vals)
         agg[k + "_runs"] = sum(1 for v in vals if v)

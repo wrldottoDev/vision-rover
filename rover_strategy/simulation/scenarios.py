@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import json
 import math
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 
 import numpy as np
 
@@ -24,12 +24,24 @@ from ..frames import Grid
 from ..geometry import shapes as S
 from ..geometry.footprint import Footprint
 from ..geometry.zones import DepotZone
-from .physics import ContactParams, MotorParams, PhysicsWorld, SimCube, SimRover
+from .physics import (
+    ContactParams,
+    MotorParams,
+    PhysicsWorld,
+    R10_LEFT_CURVE,
+    R10_RIGHT_CURVE,
+    R11_LEFT_CURVE,
+    R11_RIGHT_CURVE,
+    SimCube,
+    SimRover,
+)
 from .sensors import SensorParams, VisionEmulator
 
-FAMILIES = ("start_zone", "arbitrary", "hard", "official_like")
+FAMILIES = ("start_zone", "arbitrary", "hard", "official_like", "official_like_slow")
 # official_like: rovers in the start zone, cubes in the interior band like the official example layout
 # (config_simulador.json cubes at internal (520,660),(300,280),(660,340)): [160, 700] mm on both axes.
+# official_like_slow: same geometry, with the opt-in user-reported heavy-tailed
+# transport latency profile (p95 ~= 470 ms, capped at ~= 1420 ms).
 OFFICIAL_BAND = (160.0, 700.0)
 COLORS = ("green", "blue", "red")
 
@@ -189,22 +201,63 @@ def validate(scenario: Scenario, cfg: Config = DEFAULT) -> list[str]:
 # --------------------------------------------------------------------------- #
 
 
-def _motor_params(rng: np.random.Generator, hard: bool) -> MotorParams:
-    lo, hi = (0.85, 1.15) if hard else (0.9, 1.1)
-    gl = rng.uniform(lo, hi)
-    gr = rng.uniform(lo, hi)
+def _jitter_curve(
+    rng: np.random.Generator,
+    curve: tuple[float, ...],
+    std: tuple[float, ...],
+    hard: bool,
+) -> tuple[float, ...]:
+    """Perturb measured knots while retaining a valid saturating curve."""
+    width = 1.75 if hard else 1.0
+    values = list(curve)
+    for i in range(1, len(values) - 1):
+        values[i] = min(1.0, max(values[i - 1], values[i] + rng.normal(0.0, std[i] * width)))
+    values[0] = 0.0
+    values[-1] = 1.0
+    return tuple(float(v) for v in values)
+
+
+def _motor_params(rng: np.random.Generator, rover_id: int, hard: bool) -> MotorParams:
+    """Build a measured motor model for rover 10 or 11.
+
+    R11's 50% knot uses the observed repeated-run spread (48/44/44 cm and
+    52/48/50 cm).  R10 has no repeated-run sample, so its smaller variation is
+    an explicit uncertainty around the measured wheel curves.  The hard family
+    widens both measured distributions, but never changes rover identity.
+    """
+    if rover_id == 10:
+        curve_left, curve_right = R10_LEFT_CURVE, R10_RIGHT_CURVE
+        curve_std_left = (0.0, 0.008, 0.008, 0.006, 0.0)
+        curve_std_right = (0.0, 0.008, 0.008, 0.006, 0.0)
+        full_left, full_right = 57.5 / 58.0, 1.0
+    elif rover_id == 11:
+        curve_left, curve_right = R11_LEFT_CURVE, R11_RIGHT_CURVE
+        # Population standard deviations of the repeated 50% normalized
+        # distances: (48,44,44)/54 and (52,48,50)/58 respectively.
+        curve_std_left = (0.0, 0.010, 0.0349, 0.015, 0.0)
+        curve_std_right = (0.0, 0.010, 0.0282, 0.015, 0.0)
+        full_left, full_right = 54.0 / 58.0, 1.0
+    else:
+        raise ValueError(f"measured motor model is only defined for rover 10/11, got {rover_id}")
+
+    curve_left = _jitter_curve(rng, curve_left, curve_std_left, hard)
+    curve_right = _jitter_curve(rng, curve_right, curve_std_right, hard)
     tau = rng.uniform(0.06, 0.15) if not hard else rng.uniform(0.08, 0.20)
     latency = rng.uniform(0.02, 0.06) if not hard else rng.uniform(0.03, 0.10)
     deadband = rng.uniform(2.0, 6.0)
     noise = rng.uniform(0.01, 0.04) if not hard else rng.uniform(0.02, 0.07)
     return MotorParams(
-        gain_left=float(gl), gain_right=float(gr), deadband_mm_s=float(deadband),
+        curve_left=curve_left, curve_right=curve_right,
+        full_speed_left_factor=full_left, full_speed_right_factor=full_right,
+        deadband_mm_s=float(deadband),
         tau_s=float(tau), speed_noise_std=float(noise), latency_s=float(latency),
     )
 
 
-def _sensor_params(rng: np.random.Generator, hard: bool) -> SensorParams:
+def _sensor_params(rng: np.random.Generator, hard: bool, family: str = "") -> SensorParams:
     base = SensorParams()
+    if family == "official_like_slow":
+        return replace(base, latency_profile="realistic_latency")
     if not hard:
         return base
     scale = rng.uniform(1.3, 2.2)
@@ -252,7 +305,7 @@ def _place_rovers(rng: np.random.Generator, cfg: Config, family: str) -> list[Ro
         # the second one further down the start edge so both are still "near the
         # start corner" but geometrically feasible.
         for rid, base_cell in zip(ROVER_IDS, ((4.0, 4.0), (4.0, 12.0))):
-            if family in ("start_zone", "official_like"):
+            if family in ("start_zone", "official_like", "official_like_slow"):
                 col = base_cell[0] + rng.normal(0.0, 0.3)
                 row = base_cell[1] + rng.normal(0.0, 0.3)
                 x, y, _ = grid.to_internal_pose(col, row, 45.0)
@@ -282,7 +335,8 @@ def _place_rovers(rng: np.random.Generator, cfg: Config, family: str) -> list[Ro
             polys.append(poly)
             rovers.append((rid, x, y, theta))
         if ok:
-            return [RoverInit(id=rid, x=x, y=y, theta=th, motor=_motor_params(rng, hard)) for rid, x, y, th in rovers]
+            return [RoverInit(id=rid, x=x, y=y, theta=th, motor=_motor_params(rng, rid, hard))
+                    for rid, x, y, th in rovers]
     raise RuntimeError("failed to place rovers within max_attempts")
 
 
@@ -290,7 +344,7 @@ def _sample_cube_center(rng: np.random.Generator, cfg: Config, family: str, depo
                          color: str, grid: Grid) -> tuple[float, float]:
     W, H = cfg.board.width, cfg.board.height
     m = cfg.cube.half_diag + 2.0
-    if family == "official_like":
+    if family in ("official_like", "official_like_slow"):
         return rng.uniform(*OFFICIAL_BAND), rng.uniform(*OFFICIAL_BAND)
     if family != "hard" or rng.random() > GEN.corner_bias_prob:
         return rng.uniform(m, W - m), rng.uniform(m, H - m)
@@ -328,7 +382,7 @@ def _place_cubes(rng: np.random.Generator, cfg: Config, family: str, rovers: lis
     grid = Grid(cfg.board.cols, cfg.board.rows, cfg.board.cell_mm)
     side = cfg.cube.side
     n = int(rng.integers(2, 4))  # 2 or 3, per contract (R9)
-    if family == "official_like":
+    if family in ("official_like", "official_like_slow"):
         n = 3                    # the mission under study: three cubes
     colors = [str(c) for c in rng.choice(np.array(COLORS), size=n, replace=False)]
 
@@ -383,7 +437,7 @@ def generate(seed: int, family: str, cfg: Config = DEFAULT) -> Scenario:
 
     rovers = _place_rovers(rng, cfg, family)
     cubes = _place_cubes(rng, cfg, family, rovers, depots)
-    sensor = _sensor_params(rng, hard)
+    sensor = _sensor_params(rng, hard, family)
     contact = _contact_params(rng, hard)
 
     scenario = Scenario(
@@ -405,9 +459,17 @@ def instantiate(scenario: Scenario, cfg: Config = DEFAULT) -> tuple[PhysicsWorld
     seed (`np.random.SeedSequence.spawn`), so the pair is still fully determined by
     `scenario.seed` alone.
     """
+    # A serialized scenario is authoritative for board geometry. Rebuild only the
+    # board portion of the supplied config so restoring a 50x50 snapshot cannot
+    # silently emit 43x43 telemetry or simulate on a different field.
+    scenario_cfg = replace(
+        cfg,
+        board=replace(cfg.board, cols=scenario.board_cols, rows=scenario.board_rows,
+                      cell_mm=scenario.cell_mm),
+    )
     rng_phys, rng_sensor = (np.random.default_rng(s) for s in np.random.SeedSequence(scenario.seed).spawn(2))
     rovers = [SimRover(id=r.id, x=r.x, y=r.y, theta=r.theta, motor=r.motor) for r in scenario.rovers]
     cubes = [SimCube(color=c.color, x=c.x, y=c.y, alpha=c.alpha) for c in scenario.cubes]
-    world = PhysicsWorld(cfg, rovers, cubes, scenario.contact, rng_phys)
+    world = PhysicsWorld(scenario_cfg, rovers, cubes, scenario.contact, rng_phys)
     emu = VisionEmulator(scenario.sensor, rng_sensor, scenario.depots, scenario.start)
     return world, emu

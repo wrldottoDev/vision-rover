@@ -164,7 +164,9 @@ def test_mirrored_paddle_tip_hits_have_opposite_rotation():
         w = world([SimRover(10, 200, 430, 0, motor())],
                   [SimCube("red", 350, 430 + sign * 75, 0)])
         w.set_command(10, WheelCommand(180, 180), 0)
-        for _ in range(30):
+        # With the production 300 mm/s^2 acceleration cap, contact occurs
+        # after roughly 0.35 s; 300 ms encoded the old instantaneous motor.
+        for _ in range(40):
             w.step(0.01)
         angles.append(w.cubes["red"].alpha)
     assert abs(angles[0]) > 0.1
@@ -419,5 +421,8 @@ def test_sustained_collision_counter_is_only_an_episode_counter():
     for _ in range(100):
         w.step(0.01)
     assert w.counts["collision"] == 1
-    assert w.rovers[10].x == 200
-    assert w.rovers[11].x == 405
+    # Acceleration-limited rovers reach the collision after a small approach;
+    # they are then held stopped for the single sustained episode.
+    assert w.rovers[10].x < 201 and w.rovers[11].x > 404
+    assert w.rovers[10].wl == w.rovers[10].wr == 0
+    assert w.rovers[11].wl == w.rovers[11].wr == 0
