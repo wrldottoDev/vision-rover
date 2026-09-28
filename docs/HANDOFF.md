@@ -2,27 +2,21 @@
 
 _Last updated: 2026-09-28 by Claude Opus 5.5 (lead/final auditor)._
 
-## Where things stand (2026-09-28 ~03:40)
-- Python reference system complete as modules; closed loop now reaches real milestones in simulation
-  (SIMULATION ONLY): two rovers navigate from a tight start, capture (verified depth 26-37 mm, lateral < 4 mm),
-  push multi-leg plans; seed 0 (`official_like`) delivered a cube into its depot (truth) at ~95 s. Full 3-cube
-  missions not yet completed.
-- Current blockers: (1) no arc motions -> edge-parallel pre-push poses unreachable (last leg into corner depots,
-  cubes pushed next to an edge); (2) delivery confirmation depends on the orientation belief (fixed today: confirm
-  after retreat + depth/push-length orientation inference, being re-tested); (3) align timeouts seen in two-rover runs.
-- Codex/GPT-Luna lanes (`tools/codex_auto/`, worktrees ../V1-codex-{a,b,c}):
-  A: simulator judge/sensors/physics/motor model/MC triage (A01, A02 done, UNREVIEWED except A01 notes);
-  B: B03 merged; B01 rejected; now B05 wheel-bias redo, B06 allocator time model;
-  C: C01 rejected; now C02 ARC segments end to end (world.SegKind.ARC added by lead), C03 nav benchmark/perf.
-  Reviews: `docs/reviews/codex_reviews.md`. Gate status: `docs/reviews/GATES.md`.
+## Where things stand (2026-09-28 ~07:35)
+- Closed loop works end to end in simulation (SIMULATION ONLY). Monte Carlo, official_like seeds 100-111, 600 s:
+  strict field rule 9/36 cubes, 0 missions 3/3, 0 collisions/contacts/exits; with 20 mm allowed overhang 18/36 cubes,
+  1 full 3/3 mission in 104.8 s, 0 collisions/contacts, 1 board exit (seed 107, under analysis B09).
+- Merged today from GPT-Luna lanes: arcs (C02), telemetry adapters (B03), push-planner coverage/blockers (B07+B08),
+  simulator fidelity (A01-A05). Simulator changed materially -> re-baseline MC after A06.
+- Codex lanes running: A06 (sim review fixes), B09 (board-exit analysis, report only), C05 (nav perf w/o
+  completeness loss). Quota not exhausted as of 07:31.
 
 ## Immediate next steps (priority order)
-1. Review/merge lane C (arcs) -> rerun `tools/single_rover.py` and seed 0; expect corner deliveries to become
-   reachable; then re-enable `PushParams.require_straight_approach` semantics adapted to arcs if needed.
-2. Review lane A (A01 needs fixes: participation credit, planner_reason classification, irreversible cube exit),
-   merge A02-A04, then first meaningful Monte Carlo (official_like, 50 -> 200 seeds).
-3. Align timeouts in two-rover runs (investigate with tools/debug_run.py 0 official_like + STALL=400).
-4. Marker offset (~24 mm, USER-REPORTED) and v2 protocol: need team confirmation.
+1. Re-baseline MC on the merged simulator (strict and 20 mm), 12 -> 50 seeds.
+2. Review B09 report; fix the board exit at its root (safety first).
+3. Remaining failure classes: planner_no_solution (strict geometry + clutter: use last_blockers for sequencing),
+   corner near-misses (few mm; rules question), coordination liveness.
+4. Organiser questions (below) — they dominate achievable success.
 
 ## Open questions for the team / organisers (cannot be resolved from the repo)
 - Official depot size and delivery criterion; depot positions vs corner markers (marker freeze risk).
