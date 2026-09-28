@@ -82,6 +82,8 @@ class FsmParams:
     nav_track_cross_tol: float = 35.0
     nav_track_heading_tol: float = math.radians(30.0)
     push_line_recommit_deg: float = 3.0
+    push_line_max_change_deg: float = 15.0   # beyond this an engaged rover retreats and re-approaches
+    retreat_omega_max: float = 0.35          # rad/s heading-hold authority while retreating engaged
 
 
 class AgentContext(Protocol):
@@ -291,7 +293,10 @@ class RoverAgent:
         if self.state == S.WAIT:
             self.stats.waits_s += dt
         if self.engaged and w != 0.0 and self.state not in (S.CAPTURE, S.PUSH):
-            w = 0.0                                  # hard invariant: no free rotation with a cube in the channel
+            # hard invariant: no free rotation with a cube in the channel; a straight retreat may only apply
+            # bounded heading-hold corrections (unequal wheels), never a turn.
+            lim = self.p.retreat_omega_max if self.state == S.RETREAT else 0.0
+            w = max(-lim, min(lim, w))
         return v, w
 
     # ------------------------------------------------------------------ passive / interrupt states
@@ -522,6 +527,9 @@ class RoverAgent:
     def _s_verify_capture(self, t, est, safe, ctx):
         if self.dwell(t) < self.p.verify_s:
             return 0.0, 0.0
+        if self.dwell(t) > self.p.verify_timeout_s + 3.0:      # e.g. corridor re-commit never granted
+            self._fail_task(t, ctx, "verify capture timeout")
+            return 0.0, 0.0
         m = self._contact(est, self.t_enter + self.p.verify_s * 0.5, ctx)
         if m is None:
             if self.dwell(t) > self.p.verify_timeout_s:
@@ -543,14 +551,16 @@ class RoverAgent:
             self._go(S.MEASURE, t, ctx, "leg already complete")
             return 0.0, 0.0
         phi_new = math.atan2(*(p1 - p0)[::-1])
-        if abs(angle_diff(phi_new, est.pose.theta)) > math.radians(self.p.push_line_recommit_deg):
-            # The actual push line differs from the reserved one: re-validate the corridor.
-            region = ctx.manipulation_region(self.id, est.pose, est.pose.theta, float(np.linalg.norm(p1 - p0)))
+        dphi = abs(angle_diff(phi_new, est.pose.theta))
+        if dphi > math.radians(self.p.push_line_max_change_deg):
+            self._fail_task(t, ctx, "push line changed too much")
+            return 0.0, 0.0
+        if dphi > math.radians(self.p.push_line_recommit_deg):
+            # The actual push line differs from the reserved one: re-validate the corridor along the NEW line.
+            region = ctx.manipulation_region(self.id, est.pose, phi_new,
+                                             float(np.linalg.norm(p1 - est.pose.xy())))
             if not ctx.commit_region(self.id, region):
-                return 0.0, 0.0                      # hold (engaged) until granted; verify timeout path above
-            if abs(angle_diff(phi_new, est.pose.theta)) > math.radians(25):
-                self._fail_task(t, ctx, "push line changed too much")
-                return 0.0, 0.0
+                return 0.0, 0.0                      # hold (engaged) until granted; timeout above
         self.push_line = (p0, p1)
         self.pusher.reset((float(p0[0]), float(p0[1])), (float(p1[0]), float(p1[1])))
         self.push_budget = self.p.push_timeout_factor * (np.linalg.norm(p1 - p0) / self.cfg.limits.v_push) + 6.0
@@ -563,9 +573,9 @@ class RoverAgent:
         if self.dwell(t) > self.push_budget:
             self._fail_task(t, ctx, "push timeout")
             return 0.0, 0.0
-        obs = ctx.fresh_cube(self.task.color, t - 0.25)
+        obs = ctx.fresh_cube(self.task.color, max(self.last_seen_push, t - 0.25) + 1e-6)
         if obs is not None:
-            self.last_seen_push = t
+            self.last_seen_push = obs[2]             # newest distinct capture time, not "now"
         blind = t - self.last_seen_push
         if blind > self.p.push_blind_fail_s:
             self._fail_task(t, ctx, "cube unseen during push")
@@ -573,7 +583,8 @@ class RoverAgent:
         if blind > self.p.push_blind_hold_s:
             return 0.0, 0.0                          # hold still until the cube is seen again
         cube_xy = (float(obs[0][0]), float(obs[0][1])) if obs else None
-        v, w, done, status = self.pusher.step(est, cube_xy, 0.0 if obs else 99.0, t)
+        age = (t - obs[2]) if obs else 99.0
+        v, w, done, status = self.pusher.step(est, cube_xy, age, t)
         self.stats.push_cross_track.append(abs(status.cross_mm))
         if status.lost_cube:
             self.stats.capture_failures += 1
@@ -591,8 +602,10 @@ class RoverAgent:
         m = self._contact(est, self.t_enter + self.p.verify_s * 0.5, ctx)
         if m is None and self.dwell(t) < self.p.verify_timeout_s:
             return 0.0, 0.0
-        if m is not None:
+        if m is not None and self._fits_channel(m[0], m[1]):
             self._infer_orientation(m[0], est.pose.theta, ctx)
+        else:
+            ctx.set_cube_orientation(self.task.color, None, math.pi / 4)
         final = self.task.leg == len(self.task.plan.legs) - 1
         if final:
             self._go(S.VERIFY_DELIVERY, t, ctx)

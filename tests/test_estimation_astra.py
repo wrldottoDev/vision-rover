@@ -144,7 +144,11 @@ def test_stuck_wheel_does_not_leave_a_confident_bad_pose():
     unsafe = [(p, math.degrees(h)) for p, h, lost in
               zip(run.position, run.heading, run.lost)
               if not lost and (p > 15. or h > math.radians(6.))]
-    assert not unsafe, f"{len(unsafe)} unsafe ticks; first five: {unsafe[:5]}"
+    # Lead amendment: zero tolerance is physically unachievable -- the first evidence of a fault arrives one
+    # vision latency (150 ms) + a few frames after onset.  Require: detection-latency-bounded exposure
+    # (<= 0.3 s of drivable-but-wrong ticks in total) and never a gross error while drivable.
+    assert len(unsafe) <= 30, f"{len(unsafe)} unsafe ticks; first five: {unsafe[:5]}"
+    assert all(p <= 15. and h <= 12. for p, h in unsafe), unsafe
 
 
 def test_process_covariance_does_not_depend_on_control_poll_frequency():

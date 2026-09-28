@@ -39,6 +39,16 @@ def _disc_poly(x: float, y: float, r: float, n: int = 16) -> np.ndarray:
     return np.stack([x + rr * np.cos(a), y + rr * np.sin(a)], axis=1)
 
 
+def _inflate(poly: np.ndarray, pad: float, n: int = 12) -> np.ndarray:
+    """Conservative Minkowski sum of a convex polygon with a disc (circumscribed n-gon)."""
+    if pad <= 0.0:
+        return poly
+    a = np.linspace(0, 2 * math.pi, n, endpoint=False)
+    rr = pad / math.cos(math.pi / n)
+    ring = np.stack([rr * np.cos(a), rr * np.sin(a)], axis=1)
+    return shapes.hull((poly[:, None, :] + ring[None, :, :]).reshape(-1, 2))
+
+
 @dataclass(frozen=True)
 class SupervisorParams:
     estop_horizon_s: float = 1.0
@@ -164,7 +174,9 @@ class Supervisor:
         a = np.array([(x, y) for _, x, y in pts])
         return a.mean(axis=0), len(pts), pts[-1][0]
 
-    def _cube_obstacles(self, exclude: str | None = None) -> list[DiscObstacle]:
+    def _cube_obstacles(self, exclude: str | None = None, target: str | None = None) -> list[DiscObstacle]:
+        """Cubes (and official obstacles) as discs.  The TARGET cube of a navigation query gets a tighter
+        margin: its pre-push pose is designed to sit only prepush_clearance (+pose_uncertainty) away from it."""
         m = self.cfg.margins
         out = []
         for color, tr in self.cubes.items():
@@ -172,18 +184,33 @@ class Supervisor:
                 continue
             c = tr.estimate(self.t)
             alpha = c.alpha if (c.alpha is not None and c.alpha_std < math.radians(15)) else None
-            r = cube_half_extent(self.cfg.cube.side, alpha) + m.cube_nav + min(c.pos_std, 15.0)
+            if color == target:
+                r = cube_half_extent(self.cfg.cube.side, alpha) + m.prepush_clearance - 2.0 + min(c.pos_std, 2.0)
+            else:
+                r = cube_half_extent(self.cfg.cube.side, alpha) + m.cube_nav + min(c.pos_std, 15.0)
             out.append(DiscObstacle(c.x, c.y, r))
         for (x, y) in self.obstacles:
             out.append(DiscObstacle(x, y, OBSTACLE_HALF_DIAG + m.cube_nav))
         return out
 
     def _other_region(self, rid: int) -> list[PolyObstacle]:
-        return [PolyObstacle(p) for p in self.res.as_obstacles(rid)]
+        """The other rover's reservation, inflated by the rover-rover margin -- or, if the rovers are already
+        closer than that (start poses), by the current separation minus a little (never plan closer)."""
+        out = []
+        for other in self.ids:
+            if other == rid or other not in self.est:
+                continue
+            d_now = shapes.distance(self._env_now(rid), self._env_now(other))
+            pad = min(self.cfg.margins.rover_rover, max(0.0, d_now - 3.0))
+            for q in self.res.polygons_of(other):
+                out.append(PolyObstacle(_inflate(q, pad)))
+        return out
 
     def plan_nav(self, rid: int, goal: Pose, ignore_other: bool = False, deadline_s: float = 0.4):
         start = self.est[rid].estimate(self.t).pose
-        obs = self._cube_obstacles() + ([] if ignore_other else self._other_region(rid))
+        task = self.agents[rid].task
+        obs = self._cube_obstacles(target=task.color if task else None) + \
+            ([] if ignore_other else self._other_region(rid))
         path = self.nav.plan(start, goal, obs, self.board_w, self.board_h, deadline_s=deadline_s)
         if path is None:
             self.log(rid, "nav_fail", why=self.nav.last_failure)
@@ -253,8 +280,17 @@ class Supervisor:
         return self._commit(rid, self.committed.get(rid, []) + list(polygons))
 
     def path_still_clear(self, rid: int, path: Path, from_seg: int) -> bool:
-        rest = Path(path.segments[from_seg:], 0.0)
-        return not path_collides(self.fp, rest, self._cube_obstacles(), self.board_w, self.board_h, 0.0)
+        """Revalidate the rest of a committed path in the planning context (cubes, obstacles, other rover's
+        reservation, board margin).  The segment being executed is only checked against hard contact, since the
+        rover may legitimately be inside inflation margins while escaping or finishing it."""
+        cur = Path(path.segments[from_seg:from_seg + 1], 0.0)
+        rest = Path(path.segments[from_seg + 1:], 0.0)
+        hard = [DiscObstacle(c.x, c.y, c.r - self.cfg.margins.cube_nav) for c in self._cube_obstacles()]
+        if cur.segments and path_collides(self.fp, cur, hard, self.board_w, self.board_h, 0.0):
+            return False
+        full = self._cube_obstacles() + self._other_region(rid)
+        return not (rest.segments and path_collides(self.fp, rest, full, self.board_w, self.board_h,
+                                                    self.cfg.margins.board))
 
     def retreat_clear(self, rid: int, pose: Pose, dist: float, target: str | None) -> bool:
         sweep = self.fp.straight_sweep(pose.x, pose.y, pose.theta, -dist)

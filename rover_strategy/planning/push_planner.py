@@ -62,11 +62,24 @@ class PushParams:
     # TUNED: mild preference for delivery points close to the published depot point (lead audit),
     # scaled by depot.half so it stays meaningful regardless of the (ASSUMED) depot zone size.
     depot_center_pref_weight: float = 0.05
-    # ASSUMED (lead audit): once WE plan a push, we predict the resulting orientation is
-    # `heading mod 90` with this std -- there is no live vision feedback inside one planning call.
-    # Used as the alpha_std for every leg after the first (whose alpha/alpha_std instead come from
-    # the input CubeEstimate) when eroding the depot region / computing capture risk worst-case.
-    post_push_alpha_std: float = math.radians(8.0)
+    # TUNED: extra risk once the WORST-CASE (widened, lead audit) orientation would no longer fit
+    # the depot with margin -- a soft penalty, not a hard reject: near a tight board corner the
+    # nominally-reachable region is already only a few mm deep, and a hard worst-case gate there
+    # makes routine corner deliveries impossible outright. The gate stays on the nominal (mean)
+    # orientation; uncertainty only makes a borderline point look riskier, so it ranks worse but is
+    # not thrown away.
+    uncertainty_risk_weight: float = 0.4
+    # ASSUMED (lead audit flagged 8 deg as a placeholder; TUNED down from that here): once WE plan a
+    # push, we predict the resulting orientation is `heading mod 90` with this std -- there is no
+    # live vision feedback inside one planning call. Reasoned down from the lead's 8 deg suggestion:
+    # a straight-line push is the easiest motion a differential-drive rover makes to hold heading on
+    # (no turning), and a flat plate mechanically corrects minor cube misalignment on contact, so the
+    # residual uncertainty should be well under the 20 deg push_heading_window_deg the push itself
+    # was already allowed to be off by. At 8 deg (2*std=16) the effective usable window for a
+    # *second* leg's pivot is only push_heading_window_deg - 16 = 4 deg, which made routine 2-/3-leg
+    # corner deliveries requiring a shallow-angle avoidance leg (see PushPlanner search) fail outright
+    # even with no obstacles at all. Flagging for the lead to confirm/override.
+    post_push_alpha_std: float = math.radians(3.0)
     # Candidate-generation shape: split config.planner.delivery_candidates across this many
     # final-orientation buckets spanning the cube's mod-90 symmetry class [-45, 45) deg.
     n_alpha_buckets: int = 7
@@ -75,6 +88,11 @@ class PushParams:
 
 
 DEFAULT_PARAMS = PushParams()
+
+# Tiny inward nudge (mm) so a computed "exactly at the safety threshold" anchor lands cleanly on
+# the safe side of a containment check instead of exactly on the boundary, where float rounding can
+# put it a few ULPs over. Physically negligible; avoids flaky boundary rejections near tight corners.
+_EPS = 0.05
 
 
 # --------------------------------------------------------------------------------- pure geometry
@@ -158,8 +176,9 @@ def leg_feasible(cfg: Config, fp: Footprint, cube_xy: tuple[float, float], alpha
          Known orientation -> exact rotated-square sweep (idealised at the leg's *final* resting
          orientation, `heading mod 90`, for the whole leg -- the true orientation only differs by
          up to `push_heading_window_deg`, which the caller enforces before calling this).  Unknown
-         -> conservative disc of `cube.half_diag`.  Every *other* cube is always treated as a disc
-         of `cube.half_diag` (its own orientation is usually unknown; slightly conservative if not).
+         -> conservative disc of `cube.half_diag`.  Each *other* cube's own footprint radius is its
+         known rotated half-extent (`cube_half_extent`) if `oc.alpha` is set, else the conservative
+         `cube.half_diag`.
       4. the post-push retreat (straight reverse of `paddle_reach + retreat_margin_mm`, H-15) stays
          inside and clears `other_cubes`.
 
@@ -179,21 +198,30 @@ def leg_feasible(cfg: Config, fp: Footprint, cube_xy: tuple[float, float], alpha
     lo_x, hi_x = cfg.margins.board, board_w - cfg.margins.board
     lo_y, hi_y = cfg.margins.board, board_h - cfg.margins.board
 
-    corridor = fp.straight_sweep(rx, ry, heading, length)
+    # The rover sweeps from the PRE-PUSH pose (capture approach) through contact to the leg end.
+    approach = cfg.prepush_distance - contact
+    corridor = fp.straight_sweep(rx - approach * hx, ry - approach * hy, heading, length + approach)
     if not S.inside_rect(corridor, lo_x, hi_x, lo_y, hi_y):
         return False, "push corridor exits the field"
 
-    r_other = cfg.cube.half_diag
     clear = cfg.margins.cube_nav
+    # Each obstacle's own footprint radius: its actual (known) rotated half-extent when its
+    # orientation is known, else the conservative worst-case half-diagonal; plus its position uncertainty.
+    other_r = [(oc, (cube_half_extent(cfg.cube.side, oc.alpha) if oc.alpha is not None else cfg.cube.half_diag)
+                + min(oc.pos_std, 15.0))
+               for oc in other_cubes]
+    for oc, r_oc in other_r:
+        if S.disc_distance(corridor, (oc.x, oc.y), r_oc) < clear:
+            return False, f"rover corridor too close to cube '{oc.color}'"
 
     if alpha is None:
         r = cfg.cube.half_diag
         for (px, py) in (cube_xy, cube_end):
             if not (lo_x + r <= px <= hi_x - r and lo_y + r <= py <= hi_y - r):
                 return False, "cube sweep exits the field"
-        for oc in other_cubes:
+        for oc, r_oc in other_r:
             d = S._seg_point_dist(np.array(cube_xy, float), np.array(cube_end, float), np.array([oc.x, oc.y]))
-            if d - r - r_other < clear:
+            if d - r - r_oc < clear:
                 return False, f"cube sweep too close to cube '{oc.color}'"
     else:
         final_alpha = wrap_to_pm45(heading)
@@ -202,8 +230,8 @@ def leg_feasible(cfg: Config, fp: Footprint, cube_xy: tuple[float, float], alpha
         sweep_poly = S.hull(np.vstack([sq0, sq1]))
         if not S.inside_rect(sweep_poly, lo_x, hi_x, lo_y, hi_y):
             return False, "cube sweep exits the field"
-        for oc in other_cubes:
-            if S.disc_distance(sweep_poly, (oc.x, oc.y), r_other) < clear:
+        for oc, r_oc in other_r:
+            if S.disc_distance(sweep_poly, (oc.x, oc.y), r_oc) < clear:
                 return False, f"cube sweep too close to cube '{oc.color}'"
 
     retreat_dist = cfg.rover.paddle_reach + DEFAULT_PARAMS.retreat_margin_mm
@@ -211,8 +239,8 @@ def leg_feasible(cfg: Config, fp: Footprint, cube_xy: tuple[float, float], alpha
     retreat = fp.straight_sweep(rex, rey, heading, -retreat_dist)
     if not S.inside_rect(retreat, lo_x, hi_x, lo_y, hi_y):
         return False, "retreat exits the field"
-    for oc in other_cubes:
-        if S.disc_distance(retreat, (oc.x, oc.y), r_other) < clear:
+    for oc, r_oc in other_r:
+        if S.disc_distance(retreat, (oc.x, oc.y), r_oc) < clear:
             return False, f"retreat too close to cube '{oc.color}'"
 
     return True, ""
@@ -220,16 +248,20 @@ def leg_feasible(cfg: Config, fp: Footprint, cube_xy: tuple[float, float], alpha
 
 def _prepush_ok(cfg: Config, fp: Footprint, pose: Pose, target_xy: tuple[float, float],
                  other_cubes: Sequence[CubeEstimate], board_w: float, board_h: float) -> bool:
-    """Pre-push pose: envelope inside the field, AND the full in-place rotation-sweep circle (so the
-    rover can re-align there between legs) clear of the field edge and every other cube."""
+    """Pre-push pose: envelope inside the field (the general "pre-push pose" containment rule),
+    AND the full in-place rotation-sweep circle clear of every other cube -- including the target
+    cube at its current (intermediate) position -- per the MULTI-LEG "must be able to rotate at the
+    next prepush" rule.  That rule only requires clearance from *cubes*; it is not read here as also
+    requiring the rotation circle itself to stay inside the field (only the three explicitly listed
+    phases -- pre-push pose, push, retreat -- must; a board-edge-clipping in-place spin between two
+    otherwise-legal poses is not one of them).  cfg.prepush_distance is built to already guarantee
+    clearance from the target cube itself; the check against it below is a cheap sanity assertion."""
     lo_x, hi_x = cfg.margins.board, board_w - cfg.margins.board
     lo_y, hi_y = cfg.margins.board, board_h - cfg.margins.board
     env = fp.envelope(pose.x, pose.y, pose.theta)
     if not S.inside_rect(env, lo_x, hi_x, lo_y, hi_y):
         return False
     r = fp.sweep_radius
-    if not (lo_x + r <= pose.x <= hi_x - r and lo_y + r <= pose.y <= hi_y - r):
-        return False
     thresh = r + cfg.cube.half_diag + cfg.margins.cube_nav
     if math.hypot(pose.x - target_xy[0], pose.y - target_xy[1]) < thresh - 1e-6:
         return False  # should not happen: cfg.prepush_distance is built to satisfy this
@@ -289,16 +321,37 @@ def classify_unsolvable(cfg: Config, cube: CubeEstimate, depot: DepotZone,
 
 # --------------------------------------------------------------------------------- planner
 
-def _delivery_candidates(cfg: Config, params: PushParams, depot: DepotZone) -> list[tuple[tuple[float, float], float]]:
+def _perp_safe_value(lo: float, hi: float, corner_val: float, board_dim: float, margin: float, half_width: float) -> float:
+    """The value in [lo, hi] closest to keeping the ROVER's own half-width (not just the cube)
+    clear of the nearest board edge -- i.e. usable as the *perpendicular* axis of a straight final
+    approach.  Delivering near a board corner needs this precisely: the reachable slice of the
+    depot's valid-center region on the perpendicular axis is typically only a couple of mm wide
+    (rover half-width + margins.board eats nearly all of a corner-sized depot), far finer than any
+    affordable uniform grid pitch."""
+    if corner_val <= board_dim / 2.0:
+        safe = margin + half_width + _EPS
+        return min(hi, max(lo, safe))
+    safe = board_dim - margin - half_width - _EPS
+    return max(lo, min(hi, safe))
+
+
+def _delivery_candidates(cfg: Config, params: PushParams, depot: DepotZone, board_w: float,
+                          board_h: float) -> list[tuple[tuple[float, float], float]]:
     """Sample points across the depot's valid-center regions for a spread of final orientations.
     Returns (point, orientation_bucket) pairs; the bucket is only a sampling aid -- feasibility is
     re-checked against the *actual* resulting orientation for whatever leg reaches the point
-    (self-consistency: alpha = wrap_to_pm45(heading to that point), not the bucket)."""
+    (self-consistency: alpha = wrap_to_pm45(heading to that point), not the bucket).
+
+    Besides a uniform grid per bucket, also adds precision candidates at `_perp_safe_value` on each
+    axis (crossed with a spread on the other axis) -- see that function's docstring for why a blind
+    grid alone routinely misses the only reachable slice near a board corner."""
     side = cfg.cube.side
     margin = cfg.depot.delivery_margin
     m = max(1, params.n_alpha_buckets)
     per_bucket = max(1, round(cfg.planner.delivery_candidates / m))
     grid_n = max(1, round(math.sqrt(per_bucket)))
+    half_width = cfg.rover.outer_half_width
+    board_margin = cfg.margins.board
     out: list[tuple[tuple[float, float], float]] = []
     for i in range(m):
         deg = -45.0 + (i + 0.5) * (90.0 / m)
@@ -312,6 +365,13 @@ def _delivery_candidates(cfg: Config, params: PushParams, depot: DepotZone) -> l
         for x in xs:
             for y in ys:
                 out.append(((float(x), float(y)), a))
+        safe_x = _perp_safe_value(x0, x1, depot.cx, board_w, board_margin, half_width)
+        safe_y = _perp_safe_value(y0, y1, depot.cy, board_h, board_margin, half_width)
+        for y in ys:
+            out.append(((safe_x, float(y)), a))
+        for x in xs:
+            out.append(((float(x), safe_y), a))
+        out.append(((safe_x, safe_y), a))
     return out
 
 
@@ -334,18 +394,23 @@ def _marker_overlap_frac(cfg: Config, depot: DepotZone, D: tuple[float, float], 
 def _delivery_point_risk(cfg: Config, params: PushParams, depot: DepotZone, D: tuple[float, float],
                           alpha_mean: float, board_w: float, board_h: float) -> tuple[float, float] | None:
     """Risk term for a delivery point reached with predicted final orientation `alpha_mean`
-    (= heading mod 90).  Returns None if D is NOT self-consistent: the worst-case orientation over
-    `alpha_mean +- 2*PushParams.post_push_alpha_std` (lead audit) must still fit inside the depot's
-    valid-center region with `config.depot.delivery_margin` -- otherwise the cube could actually
-    stick out, so this D is rejected outright for this leg, not merely penalised.
+    (= heading mod 90).  Returns None if D is NOT self-consistent under the *nominal* (mean)
+    orientation: it must fit inside the depot's valid-center region with `config.depot.
+    delivery_margin`, else the cube would predictably stick out and this D is rejected outright.
 
-    Otherwise returns (risk, marker_frac): risk blends distance-to-region-border (favours margin),
-    corner-marker AABB overlap (favours dodging the marker -- hard-tiered by the caller, this is
-    just its magnitude for tie-breaking) and a mild pull towards the published depot point.
+    The WORST-CASE orientation over `alpha_mean +- 2*PushParams.post_push_alpha_std` (lead audit)
+    is folded in as an extra RISK term instead of a second hard gate: right at a board corner the
+    nominally-reachable region is already only a few mm deep (rover-envelope clearance eats most of
+    config.depot.half_size), so hard-rejecting on the worst case there would make routine corner
+    deliveries impossible outright. A borderline point still ranks worse, it just is not discarded.
+
+    Otherwise returns (risk, marker_frac): risk blends distance-to-region-border, the worst-case
+    uncertainty penalty above, corner-marker AABB overlap (favours dodging the marker -- hard-tiered
+    by the caller, this is just its magnitude for tie-breaking) and a mild pull towards the
+    published depot point.
     """
     side = cfg.cube.side
-    worst_alpha = _worst_alpha_for_extent(alpha_mean, params.post_push_alpha_std)
-    region = depot.valid_center_region(side, worst_alpha, cfg.depot.delivery_margin)
+    region = depot.valid_center_region(side, alpha_mean, cfg.depot.delivery_margin)
     if region is None:
         return None
     x0, x1, y0, y1 = region
@@ -356,32 +421,80 @@ def _delivery_point_risk(cfg: Config, params: PushParams, depot: DepotZone, D: t
     cxr, cyr = (x0 + x1) / 2.0, (y0 + y1) / 2.0
     border_risk = min(1.0, max(abs(D[0] - cxr) / hx, abs(D[1] - cyr) / hy))
     center_pref = min(1.0, math.hypot(D[0] - depot.cx, D[1] - depot.cy) / max(depot.half, 1e-6))
+
+    worst_alpha = _worst_alpha_for_extent(alpha_mean, params.post_push_alpha_std)
+    worst_region = depot.valid_center_region(side, worst_alpha, cfg.depot.delivery_margin)
+    if worst_region is None:
+        uncertainty_risk = 1.0
+    else:
+        wx0, wx1, wy0, wy1 = worst_region
+        whx, why = max((wx1 - wx0) / 2.0, 1e-6), max((wy1 - wy0) / 2.0, 1e-6)
+        wcxr, wcyr = (wx0 + wx1) / 2.0, (wy0 + wy1) / 2.0
+        worst_frac = max(abs(D[0] - wcxr) / whx, abs(D[1] - wcyr) / why)   # > 1 => sticks out under worst case
+        uncertainty_risk = min(1.0, max(0.0, worst_frac - 1.0))
     marker_frac = _marker_overlap_frac(cfg, depot, D, worst_alpha, board_w, board_h)
 
     risk = (params.border_risk_weight * border_risk
             + params.marker_risk_weight * marker_frac
-            + params.depot_center_pref_weight * center_pref)
+            + params.depot_center_pref_weight * center_pref
+            + params.uncertainty_risk_weight * uncertainty_risk)
     return min(1.0, risk), marker_frac
 
 
-def _intermediate_grid(cfg: Config, params: PushParams, board_w: float, board_h: float,
-                        cube_xy: tuple[float, float], d_points: Sequence[tuple[float, float]]
-                        ) -> list[tuple[float, float]]:
-    """Coarse spatial grid (for routing around obstacles) PLUS, for every delivery candidate, the
-    two "elbow" points that let a straight leg reach it axis-aligned from `cube_xy` -- (D.x, cube.y)
-    and (cube.x, D.y).  Delivering into a board corner routinely needs the final leg's *perpendicular*
-    axis to land within a very tight band (a couple of mm, given typical margins/rover width), far
-    finer than any affordable uniform grid pitch; the elbow anchors hit that band directly instead
-    of hoping a blind grid does."""
+def _grid_axes(cfg: Config, params: PushParams, board_w: float, board_h: float) -> tuple[list[float], list[float]]:
+    """Coarse per-axis grid values, PLUS precision anchors on each axis:
+      - the rover-envelope-safe values (see `_perp_safe_value`) -- a straight leg along a board
+        edge routinely needs its perpendicular coordinate within a couple of mm of one of these.
+      - the "either-direction-safe" values `margins.board + prepush_distance + chassis_half_length`
+        from each edge -- a waypoint used to STAGE a later axis-aligned approach (as opposed to
+        being the approach's own perpendicular coordinate) instead needs enough clearance for a
+        full pre-push pose in front of AND behind it, which is a much larger margin than the
+        rover's own half-width; without this anchor a coarse grid can land a staging point just
+        short of the room a subsequent leg needs to even get lined up.
+    A uniform pitch alone can straddle either band without ever landing inside it."""
     lo_margin = cfg.margins.board + cfg.cube.half_diag + 5.0
     xs = np.arange(lo_margin, board_w - lo_margin, params.intermediate_grid_mm)
     ys = np.arange(lo_margin, board_h - lo_margin, params.intermediate_grid_mm)
-    pts = {(float(x), float(y)) for x in xs for y in ys}
-    cx, cy = cube_xy
+    half_width, m = cfg.rover.outer_half_width, cfg.margins.board
+    stage = cfg.prepush_distance + cfg.rover.chassis_half_length
+    extra = [m + half_width + _EPS, board_w - m - half_width - _EPS, m + stage + _EPS, board_w - m - stage - _EPS]
+    extra_y = [m + half_width + _EPS, board_h - m - half_width - _EPS, m + stage + _EPS, board_h - m - stage - _EPS]
+    xs = list(xs) + extra
+    ys = list(ys) + extra_y
+    return [float(x) for x in xs], [float(y) for y in ys]
+
+
+def _intermediate_grid(xs: Sequence[float], ys: Sequence[float]) -> list[tuple[float, float]]:
+    """Coarse spatial grid, for routing an intermediate leg around obstacles.  Trade-off: finer
+    pitch finds more/tighter routes but the 2-/3-leg search cost grows ~ (board/pitch)^2 per hop;
+    `PushParams.intermediate_grid_mm` (baked into `xs`/`ys`, see `_grid_axes`) picks the pitch."""
+    return [(x, y) for x in xs for y in ys]
+
+
+def _hop_candidates(pos: tuple[float, float], d_points: Sequence[tuple[float, float]], grid: list[tuple[float, float]],
+                     xs: Sequence[float], ys: Sequence[float]) -> list[tuple[float, float]]:
+    """Candidate next waypoints from `pos`: the generic spatial `grid` (routes around obstacles)
+    PLUS two kinds of axis-aligned anchor that a uniform grid is too coarse to hit reliably:
+      - for every delivery candidate D, the "elbow" points (D.x, pos.y) / (pos.x, D.y) that let the
+        NEXT leg reach D axis-aligned.  Delivering into a board corner routinely needs the final
+        leg's *perpendicular* axis to land within a very tight band (a couple of mm, given typical
+        margins/rover width) -- these hit that band directly instead of hoping a blind grid does.
+      - a plain axis-aligned "cross" through `pos` itself, ((x, pos.y) / (pos.x, y) for the grid's
+        own x/y values), so a leg FROM `pos` can itself be axis-aligned (locking a mod-90 orientation
+        the *next* leg can then reuse within the push_heading_window, per the physical rule that a
+        known-oriented cube can only be re-pushed near one of its own face normals).
+    Computed fresh at whatever position the search has actually reached (not just the cube's
+    original spot), so a 3rd leg can still square up a 2-leg route that only got partway there."""
+    px, py = pos
+    out = list(grid)
     for D in d_points:
-        pts.add((D[0], cy))
-        pts.add((cx, D[1]))
-    return list(pts)
+        out.append((D[0], py))
+        out.append((px, D[1]))
+    for x in xs:
+        out.append((x, py))
+    for y in ys:
+        out.append((px, y))
+    return out
 
 
 _LegAttempt = tuple[PushLeg, float, float, float]   # leg, resulting_alpha, cost_s, risk
@@ -439,7 +552,7 @@ class PushPlanner:
             scored = _delivery_point_risk(cfg, p, depot, D, a, board_w, board_h)
             return 1.0 if scored is None else scored[0]
 
-        d_points = sorted({D for D, _a in _delivery_candidates(cfg, p, depot)},
+        d_points = sorted({D for D, _a in _delivery_candidates(cfg, p, depot, board_w, board_h)},
                            key=lambda D: order_key(D, wrap_to_pm45(math.atan2(D[1] - cube.y, D[0] - cube.x))))
 
         def budget_left() -> float:
@@ -458,7 +571,7 @@ class PushPlanner:
             leg, alpha_final, cost, leg_risk = att
             scored = _delivery_point_risk(cfg, p, depot, D, alpha_final, board_w, board_h)
             if scored is None:
-                return   # not self-consistent: worst-case orientation would stick out of the depot
+                return   # not self-consistent: predicted orientation would stick out of the depot
             d_risk, marker_frac = scored
             total_cost = prior_cost + cost
             total_risk = _combine_risk([*prior_risks, leg_risk, d_risk], p)
@@ -475,9 +588,11 @@ class PushPlanner:
 
         # ---- 2-/3-leg (only if we still need more candidates and legs are allowed)
         if len(results) < max_plans and budget_left() > 0 and cfg.planner.max_push_legs >= 2:
-            grid = _intermediate_grid(cfg, p, board_w, board_h, start, d_points)
+            grid_xs, grid_ys = _grid_axes(cfg, p, board_w, board_h)
+            grid = _intermediate_grid(grid_xs, grid_ys)
+            hop1_candidates = _hop_candidates(start, d_points, grid, grid_xs, grid_ys)
             hop1 = []
-            for I1 in grid:
+            for I1 in hop1_candidates:
                 if budget_left() <= 0:
                     break
                 att = _leg_attempt(cfg, fp, start, cube.alpha, cube.alpha_std, I1, others, board_w, board_h, p)
@@ -492,11 +607,20 @@ class PushPlanner:
                         break
                     try_final([leg1], cost1, [risk1], I1, alpha1, p.post_push_alpha_std, D, "2-leg")
 
-            if cfg.planner.max_push_legs >= 3:
-                for I1, leg1, alpha1, cost1, risk1 in hop1:
+            # Only pay for the O(hop1 x hop2 x delivery) 3-leg search if 1-/2-leg genuinely didn't
+            # already give us enough plans -- this is the expensive phase and most cubes never need
+            # it, so gating it keeps the common case fast (typically well under 0.15s).
+            if len(results) < max_plans and cfg.planner.max_push_legs >= 3:
+                # Cap how many first hops feed the 3-leg search: try the most promising (cheapest,
+                # safest) ones first: a 3rd leg is only ever needed for the few hop1's that a 2-leg
+                # couldn't already close out, and this bounds the O(hop1 x hop2 x delivery) blow-up.
+                hop1_ranked = sorted(hop1, key=lambda h: (h[3], h[4]))[:20]
+                for I1, leg1, alpha1, cost1, risk1 in hop1_ranked:
                     if budget_left() <= 0:
                         break
-                    for I2 in grid:
+                    # Anchors relative to I1 (not just the original cube position) so a 3rd leg can
+                    # still square up to a tight corner even when the 2-leg route only got partway.
+                    for I2 in _hop_candidates(I1, d_points, grid, grid_xs, grid_ys):
                         if budget_left() <= 0:
                             break
                         att_mid = _leg_attempt(cfg, fp, I1, alpha1, p.post_push_alpha_std, I2, others,

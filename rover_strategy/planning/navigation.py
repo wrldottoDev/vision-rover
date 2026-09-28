@@ -79,10 +79,49 @@ def _poly_out_of_board(poly: np.ndarray, board_w: float, board_h: float, board_m
     return not S.inside_rect(poly, board_margin, board_w - board_margin, board_margin, board_h - board_margin)
 
 
-def _poly_hits_obstacle(poly: np.ndarray, obstacle: Obstacle) -> bool:
+def _poly_hits_obstacle(poly: np.ndarray, obstacle: Obstacle, pad: float = 0.0) -> bool:
+    """True if `poly` is within `pad` of touching `obstacle` (pad=0 -> plain touch/overlap).
+
+    `pad` is how the continuous-rotation-sweep conservatism (see `_arc_pad`) is applied: instead of
+    inflating the polygon geometrically, we shrink the "safe" gap by `pad`, which is equivalent and
+    cheaper with the primitives `shapes.py` already provides. For pad=0 this is exactly the original
+    check (`S.distance(...) <= 0.0` <=> `S.overlap(...)`, since `distance` returns 0 iff they overlap).
+    """
     if isinstance(obstacle, DiscObstacle):
-        return S.disc_distance(poly, (obstacle.x, obstacle.y), obstacle.r) <= 0.0
-    return S.overlap(poly, obstacle.poly)
+        return S.disc_distance(poly, (obstacle.x, obstacle.y), obstacle.r) <= pad
+    return S.distance(poly, obstacle.poly) <= pad
+
+
+def _fp_sweep_radius(fp) -> float:
+    """Max distance from the rotation pivot to any footprint point, for a `fp` that only guarantees
+    `.envelope(x, y, theta)` (an explicit `.sweep_radius` attribute, e.g. on `Footprint`, is used
+    when present -- it's the same number, just precomputed)."""
+    r = getattr(fp, "sweep_radius", None)
+    if r is not None:
+        return float(r)
+    poly = fp.envelope(0.0, 0.0, 0.0)
+    return float(np.max(np.hypot(poly[:, 0], poly[:, 1])))
+
+
+def _arc_pad(radius: float, dtheta: float) -> float:
+    """Sagitta: max distance a point at `radius` from a rotation's pivot can stray from the straight
+    chord joining its positions at the two ends of a rotation spanning `dtheta` radians. Padding a
+    per-interval swept hull by this (conservatively, using the footprint's max corner radius) turns a
+    finite-sample rotation check into a proof that covers the whole continuous sweep in that interval."""
+    return abs(radius) * (1.0 - math.cos(dtheta / 2.0))
+
+
+def _inflate_hull(poly: np.ndarray, pad: float, n: int = 8) -> np.ndarray:
+    """Conservative (superset) convex approximation of the Minkowski sum of `poly` with a disc of
+    radius `pad`: circumscribe each vertex with a coarse n-gon that contains that disc, then re-hull.
+    ponytail: an n-gon per vertex, not an exact rounded offset -- fine for the sub-mm/few-mm pads used
+    here; revisit with true polygon offsetting if `pad` is ever large relative to `poly`."""
+    if pad <= 0.0:
+        return poly
+    r = pad / math.cos(math.pi / n)
+    extra = [(vx + r * math.cos(2 * math.pi * k / n), vy + r * math.sin(2 * math.pi * k / n))
+             for vx, vy in poly for k in range(n)]
+    return S.hull(np.vstack([poly, np.array(extra)]))
 
 
 def pose_collides(fp, pose: Pose, obstacles: Sequence[Obstacle], board_w: float, board_h: float,
@@ -108,18 +147,29 @@ def segment_collides(fp, seg: Segment, obstacles: Sequence[Obstacle], board_w: f
                       board_margin: float) -> bool:
     """Checks the whole swept motion of `seg`, not just its endpoints.
 
-    ROTATE: sampled every <=5 deg (module constant `_ROTATE_SAMPLE_RAD`); the rover pivots about a
-    fixed (x, y) so each sample is a plain pose check.
+    ROTATE: split into <=5 deg intervals (module constant `_ROTATE_SAMPLE_RAD`); each interval's
+    endpoint envelopes are hulled together (like a straight sweep) and the hit test is padded by that
+    interval's arc/chord error (`_arc_pad`), so the check is a conservative proof for the *continuous*
+    sweep, not just the sampled endpoints (a coarse sample can straddle a real contact -- see gate 5).
     STRAIGHT: exact -- the convex hull of the start and end envelope IS the swept region for a
     translation of a convex shape, no sampling needed.
     """
     if seg.kind is SegKind.ROTATE:
         dtheta = angle_diff(seg.end.theta, seg.start.theta)
         n = max(1, int(math.ceil(abs(dtheta) / _ROTATE_SAMPLE_RAD)))
-        for k in range(n + 1):
-            th = wrap(seg.start.theta + dtheta * k / n)
-            if pose_collides(fp, Pose(seg.start.x, seg.start.y, th), obstacles, board_w, board_h, board_margin):
+        step = dtheta / n
+        pad = _arc_pad(_fp_sweep_radius(fp), step)
+        eff_margin = board_margin + pad
+        prev = fp.envelope(seg.start.x, seg.start.y, seg.start.theta)
+        for k in range(1, n + 1):
+            th = wrap(seg.start.theta + step * k)
+            cur = fp.envelope(seg.start.x, seg.start.y, th)
+            poly = S.hull(np.vstack([prev, cur]))
+            if _poly_out_of_board(poly, board_w, board_h, eff_margin):
                 return True
+            if any(_poly_hits_obstacle(poly, o, pad) for o in obstacles):
+                return True
+            prev = cur
         return False
     poly = _swept_hull(fp, seg.start, seg.end)
     if _poly_out_of_board(poly, board_w, board_h, board_margin):
@@ -133,15 +183,24 @@ def path_collides(fp, path: Path, obstacles: Sequence[Obstacle], board_w: float,
 
 
 def swept_polygons(fp, path: Path) -> list[np.ndarray]:
-    """Conservative convex polygons covering the whole motion, one per segment (for reservations)."""
+    """Conservative convex polygons covering the whole motion, one per segment (for reservations).
+
+    Each returned polygon is a guaranteed SUPERSET of the true swept footprint -- required since other
+    rovers' reservations are checked against it. ROTATE: hull of many fine-angle samples still misses
+    the arc bulging past the chord between samples (see `_arc_pad`), so the sampled hull is additionally
+    padded (`_inflate_hull`) by that interval's arc error before being returned.
+    """
     polys = []
     for seg in path.segments:
         if seg.kind is SegKind.ROTATE:
             dtheta = angle_diff(seg.end.theta, seg.start.theta)
             n = max(1, int(math.ceil(abs(dtheta) / _SWEEP_SAMPLE_RAD)))
-            pts = [fp.envelope(seg.start.x, seg.start.y, wrap(seg.start.theta + dtheta * k / n))
+            step = dtheta / n
+            pts = [fp.envelope(seg.start.x, seg.start.y, wrap(seg.start.theta + step * k))
                    for k in range(n + 1)]
-            polys.append(S.hull(np.vstack(pts)))
+            raw = S.hull(np.vstack(pts))
+            pad = _arc_pad(_fp_sweep_radius(fp), step)
+            polys.append(_inflate_hull(raw, pad))
         else:
             polys.append(_swept_hull(fp, seg.start, seg.end))
     return polys
@@ -174,19 +233,20 @@ def _fast_seg_point_dist(x1: float, y1: float, x2: float, y2: float, px: float, 
     return math.hypot(x1 + t * abx - px, y1 + t * aby - py)
 
 
-def _fast_disc_hit(pts: list[tuple[float, float]], cx: float, cy: float, r: float) -> bool:
+def _fast_disc_hit(pts: list[tuple[float, float]], cx: float, cy: float, r: float, pad: float = 0.0) -> bool:
     if _fast_point_in(pts, cx, cy):
         return True
     n = len(pts)
     for i in range(n):
         x1, y1 = pts[i]
         x2, y2 = pts[(i + 1) % n]
-        if _fast_seg_point_dist(x1, y1, x2, y2, cx, cy) <= r:
+        if _fast_seg_point_dist(x1, y1, x2, y2, cx, cy) <= r + pad:
             return True
     return False
 
 
-def _fast_overlap(A: list[tuple[float, float]], B: list[tuple[float, float]]) -> bool:
+def _fast_overlap(A: list[tuple[float, float]], B: list[tuple[float, float]], pad: float = 0.0) -> bool:
+    """True if convex A, B are within `pad` of touching (pad=0 -> plain SAT overlap)."""
     for P, Q in ((A, B), (B, A)):
         n = len(P)
         for i in range(n):
@@ -205,9 +265,32 @@ def _fast_overlap(A: list[tuple[float, float]], B: list[tuple[float, float]]) ->
             for (px, py) in Q[1:]:
                 d = px * nx + py * ny
                 bmin, bmax = min(bmin, d), max(bmax, d)
-            if amax < bmin or bmax < amin:
+            if amax < bmin - pad or bmax < amin - pad:
                 return False
     return True
+
+
+def _fast_hull(pts: list[tuple[float, float]]) -> list[tuple[float, float]]:
+    """Pure-python monotone-chain convex hull (mirrors `shapes.hull`), CCW. Kept python-native (no
+    numpy round-trip) since it runs in the search's hot loop for every rotation interval."""
+    pts = sorted(set(pts))
+    if len(pts) <= 2:
+        return pts
+
+    def cross(o, a, b):
+        return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
+
+    lo: list[tuple[float, float]] = []
+    for p in pts:
+        while len(lo) >= 2 and cross(lo[-2], lo[-1], p) <= 0:
+            lo.pop()
+        lo.append(p)
+    hi: list[tuple[float, float]] = []
+    for p in reversed(pts):
+        while len(hi) >= 2 and cross(hi[-2], hi[-1], p) <= 0:
+            hi.pop()
+        hi.append(p)
+    return lo[:-1] + hi[:-1]
 
 
 class _FastCache:
@@ -215,10 +298,14 @@ class _FastCache:
 
     def __init__(self, fp: Footprint):
         self._local = [(float(p[0]), float(p[1])) for p in fp.local_envelope()]
+        self.sweep_radius = max(math.hypot(lx, ly) for lx, ly in self._local)
         self._cache: dict[float, list[tuple[float, float]]] = {}
 
     def poly(self, x: float, y: float, th: float) -> list[tuple[float, float]]:
-        key = round(th, 5)
+        # Exact float key: a rounded/quantized key can silently share one rotated polygon between two
+        # headings that are actually distinct (e.g. 0 and 4e-6 rad), hiding a real sub-mm-scale contact
+        # (gate 5 finding 9). Lattice headings repeat via identical arithmetic, so this still caches well.
+        key = th
         rot = self._cache.get(key)
         if rot is None:
             c, s = math.cos(th), math.sin(th)
@@ -258,13 +345,32 @@ def _fast_pose_collides(cache: _FastCache, pose: Pose, obstacles_fast, board_w: 
 def _fast_segment_collides(cache: _FastCache, seg: Segment, obstacles_fast, board_w: float, board_h: float,
                             board_margin: float) -> bool:
     if seg.kind is SegKind.ROTATE:
+        # Same conservative interval-hull + arc-pad treatment as the public `segment_collides` (kept in
+        # sync deliberately -- both must accept/reject the same continuous sweep, see the fuzz-equivalence
+        # test), just built on the pure-python primitives this hot path uses.
         dtheta = angle_diff(seg.end.theta, seg.start.theta)
         n = max(1, int(math.ceil(abs(dtheta) / _ROTATE_SAMPLE_RAD)))
-        for k in range(n + 1):
-            th = wrap(seg.start.theta + dtheta * k / n)
-            if _fast_pose_collides(cache, Pose(seg.start.x, seg.start.y, th), obstacles_fast, board_w, board_h,
-                                    board_margin):
+        step = dtheta / n
+        pad = _arc_pad(cache.sweep_radius, step)
+        eff_margin = board_margin + pad
+        prev = cache.poly(seg.start.x, seg.start.y, seg.start.theta)
+        for k in range(1, n + 1):
+            th = wrap(seg.start.theta + step * k)
+            cur = cache.poly(seg.start.x, seg.start.y, th)
+            hull_pts = _fast_hull(prev + cur)
+            xs = [p[0] for p in hull_pts]
+            ys = [p[1] for p in hull_pts]
+            if min(xs) < eff_margin or max(xs) > board_w - eff_margin:
                 return True
+            if min(ys) < eff_margin or max(ys) > board_h - eff_margin:
+                return True
+            for o in obstacles_fast:
+                if o[0] == "d":
+                    if _fast_disc_hit(hull_pts, o[1], o[2], o[3], pad):
+                        return True
+                elif _fast_overlap(hull_pts, o[1], pad):
+                    return True
+            prev = cur
         return False
     a = cache.poly(seg.start.x, seg.start.y, seg.start.theta)
     b = cache.poly(seg.end.x, seg.end.y, seg.end.theta)
@@ -303,8 +409,8 @@ class NavParams:
     step_mm: float = 40.0                          # TUNED: 2x nav_cell_mm straight-primitive length
     reverse_penalty: float = 1.6                   # TUNED: time multiplier for reverse segments
     rotate_settle_s: float = 0.35                  # TUNED: fixed accel/decel+settle overhead / rotation
-    goal_pos_tol_mm: float = 18.0                  # ASSUMED: acceptable pre-push position error
-    goal_theta_tol_rad: float = math.radians(6.0)  # ASSUMED: acceptable pre-push heading error
+    goal_pos_tol_mm: float = 5.0                   # ASSUMED: capture needs precision (Gate 5 3/4): <=5mm
+    goal_theta_tol_rad: float = math.radians(3.0)  # ASSUMED: capture needs precision (Gate 5 3/4): <=3deg
     escape_step_mm: float = 15.0                   # TUNED: step size for the start-in-collision escape
     escape_rotate_rad: float = math.radians(12.0)  # TUNED
     escape_max_steps: int = 12
@@ -370,11 +476,23 @@ class NavPlanner:
             if _fast_pose_collides(cache0, start, obstacles_fast, board_w, board_h, board_margin):
                 self.last_failure = "start pose in collision (uninflated)"
                 return None
-            escaped = self._escape(cache, cache0, fp0, start, obstacles, board_w, board_h, board_margin)
+            # One absolute deadline covers every phase (Gate 5 finding 7): check it before starting the
+            # (potentially expensive) escape search rather than only after, so an already-expired budget
+            # never even begins work it cannot finish.
+            if time.monotonic() - t0 > deadline_s:
+                self.last_failure = "deadline exceeded"
+                return None
+            escaped = self._escape(cache, cache0, fp0, start, obstacles, board_w, board_h, board_margin,
+                                    deadline_s, t0)
             if escaped is None:
-                self.last_failure = "start pose in inflated collision; escape failed"
+                if not self.last_failure:
+                    self.last_failure = "start pose in inflated collision; escape failed"
                 return None
             search_start, prefix = escaped
+
+        if time.monotonic() - t0 > deadline_s:
+            self.last_failure = "deadline exceeded"
+            return None
 
         result = self._search(cache, search_start, goal, obstacles_fast, board_w, board_h, board_margin,
                                deadline_s, t0)
@@ -383,11 +501,20 @@ class NavPlanner:
 
         segs = prefix + result
         if not segs:
-            # start already at goal (within tolerance): still return a well-formed Path (`.goal` reads
-            # the last segment's end) rather than an empty one.
-            segs = [Segment(SegKind.STRAIGHT, search_start, search_start, reverse=False)]
+            # Start already at goal (within tolerance): a well-formed, trivially-done path (`.goal`
+            # reads the last segment's end), not a STRAIGHT segment carrying some arbitrary heading a
+            # follower would try to track (Gate 5 finding 4) -- a zero-angle ROTATE is a no-op for any
+            # follower/FSM that watches for start==end.
+            segs = [Segment(SegKind.ROTATE, search_start, search_start)]
         path = Path(segments=segs, cost_s=_segs_cost(segs, cfg, params))
-        return self._smooth(cache, path, obstacles_fast, board_w, board_h, board_margin)
+        path = self._smooth(cache, path, obstacles_fast, board_w, board_h, board_margin, deadline_s, t0)
+
+        # Final validation with the PUBLIC (numpy) collision checker (Gate 5 finding 9): catches any
+        # internal fast-path bug before a colliding path is ever handed back to a caller.
+        if path_collides(fp, path, obstacles, board_w, board_h, board_margin):
+            self.last_failure = "internal error: planned path failed public re-validation"
+            return None
+        return path
 
     # -- start-in-collision escape -------------------------------------------------------------
     def _escape_moves(self, p: Pose) -> list[tuple[Pose, Segment]]:
@@ -402,8 +529,8 @@ class NavPlanner:
         ]
 
     def _escape(self, cache: "_FastCache", cache0: "_FastCache", fp0: Footprint, pose: Pose,
-                obstacles: Sequence[Obstacle], board_w: float, board_h: float,
-                board_margin: float) -> tuple[Pose, list[Segment]] | None:
+                obstacles: Sequence[Obstacle], board_w: float, board_h: float, board_margin: float,
+                deadline_s: float, t0: float) -> tuple[Pose, list[Segment]] | None:
         """Only reached when `pose` is free of real obstacles/board at zero inflation but still
         collides once inflated -- i.e. the collision is purely a safety-margin artifact (e.g. just
         retreated from a cube). Each candidate move must be genuinely collision-free at zero
@@ -415,6 +542,9 @@ class NavPlanner:
         frontier = [(pose, start_clear, [])]
         seen = {pose}
         for _ in range(self.params.escape_max_steps):
+            if time.monotonic() - t0 > deadline_s:
+                self.last_failure = "deadline exceeded"
+                return None
             nxt = []
             for p, c, segs in frontier:
                 for cand, seg in self._escape_moves(p):
@@ -439,12 +569,12 @@ class NavPlanner:
     def _analytic_connect(self, cache: "_FastCache", pose: Pose, goal: Pose, obstacles_fast, board_w: float,
                            board_h: float, board_margin: float) -> list[Segment] | None:
         """Try to connect `pose` directly to `goal` with rotate/straight/rotate primitives. Returns
-        the cheapest collision-free candidate, or None. Candidates:
-          A. `pose` is already headed within a few degrees of `goal.theta` and laterally aligned
-             with the goal -> a single straight segment (no rotation is ever done AT `goal`, which
-             matters when in-place rotation there would sweep off the board).
-          B. Rotate to face `goal`, drive straight to it, rotate to `goal.theta` there (classic RTR;
-             tried in both a forward-driving and a reverse-driving flavour).
+        the cheapest collision-free candidate, or None: rotate to face `goal`, drive straight to it,
+        rotate to `goal.theta` there (classic RTR; tried in both a forward-driving and a
+        reverse-driving flavour). A straight segment is only ever produced between two poses that
+        share a heading collinear with the displacement (each RTR variant's straight leg has both
+        endpoints at the *same* theta, exactly along that heading -- never a shortcut that lets a
+        differential-drive rover "strafe" a small lateral offset away, see Gate 5 finding 1).
         """
         eps = 1e-6
         dx, dy = goal.x - pose.x, goal.y - pose.y
@@ -457,14 +587,6 @@ class NavPlanner:
             else:
                 candidates.append([])
         else:
-            if abs(angle_diff(goal.theta, pose.theta)) < math.radians(3.0):
-                ux, uy = math.cos(pose.theta), math.sin(pose.theta)
-                along = dx * ux + dy * uy
-                lateral = abs(-uy * dx + ux * dy)
-                if lateral <= self.params.goal_pos_tol_mm:
-                    end = Pose(goal.x, goal.y, pose.theta)
-                    candidates.append([Segment(SegKind.STRAIGHT, pose, end, reverse=along < 0)])
-
             phi = math.atan2(dy, dx)
             for target_theta, rev in ((phi, False), (wrap(phi + math.pi), True)):
                 segs: list[Segment] = []
@@ -511,8 +633,13 @@ class NavPlanner:
         max_exp = params.max_expansions or cfg.planner.nav_max_expansions
 
         def h(pose: Pose) -> float:
-            d = math.hypot(goal.x - pose.x, goal.y - pose.y)
-            dth = abs(angle_diff(goal.theta, pose.theta))
+            # Tolerance-aware (Gate 5 finding 8): an accepted goal only needs to land within
+            # goal_pos_tol_mm / goal_theta_tol_rad, so the remaining distance/angle still owed is
+            # whatever exceeds that tolerance (floored at 0), not the distance to the exact goal pose --
+            # otherwise h can overestimate the true cost of a legally-accepted (tolerance) goal, which
+            # breaks A*'s admissibility guarantee.
+            d = max(0.0, math.hypot(goal.x - pose.x, goal.y - pose.y) - params.goal_pos_tol_mm)
+            dth = max(0.0, abs(angle_diff(goal.theta, pose.theta)) - params.goal_theta_tol_rad)
             return d / cfg.limits.v_nav + dth / cfg.limits.w_nav
 
         def key(pose: Pose) -> tuple[int, int, int]:
@@ -529,30 +656,49 @@ class NavPlanner:
         best_g = {key(start): 0.0}
         expansions = 0
 
+        # Gate 5 finding 8: the first successful analytic (RTR) connection is kept as an INCUMBENT
+        # rather than returned immediately -- a cheaper lattice path may still exist. Search continues
+        # (bounded: it stops as soon as the open set's lower bound `f` can no longer beat the incumbent,
+        # the standard admissible-heuristic proof of optimality) instead of accepting the first hit.
+        incumbent: list[Segment] | None = None
+        incumbent_cost = math.inf
+
+        def consider(segs: list[Segment], cost: float) -> None:
+            nonlocal incumbent, incumbent_cost
+            if cost < incumbent_cost - 1e-9:
+                incumbent, incumbent_cost = segs, cost
+
+        if is_goal(start):
+            consider([], 0.0)
+
+        reason = "no path found"
         while openh:
+            # One absolute deadline (Gate 5 finding 7): an expired budget is a hard failure, even with a
+            # valid incumbent in hand -- the caller needed an answer (or a clear "no") by this time.
             if time.monotonic() - t0 > deadline_s:
                 self.last_failure = "deadline exceeded"
                 return None
-            _, _, ni = heapq.heappop(openh)
+            f, _, ni = heapq.heappop(openh)
+            if incumbent is not None and f >= incumbent_cost - 1e-9:
+                break
             node = nodes[ni]
             if node.g > best_g.get(key(node.pose), math.inf) + 1e-9:
                 continue
             if is_goal(node.pose):
-                return self._reconstruct(nodes, ni)
+                consider(self._reconstruct(nodes, ni), node.g)
+                continue
 
             expansions += 1
             if expansions > max_exp:
-                self.last_failure = "max expansions exceeded"
-                return None
+                reason = "max expansions exceeded"
+                break
 
             near_goal = math.hypot(goal.x - node.pose.x, goal.y - node.pose.y) <= 3.0 * params.step_mm
             if near_goal or expansions == 1 or expansions % params.analytic_every == 0:
                 connect = self._analytic_connect(cache, node.pose, goal, obstacles_fast, board_w, board_h,
                                                   board_margin)
                 if connect is not None:
-                    gg = node.g + _segs_cost(connect, cfg, params)
-                    nodes.append(_Node(goal, gg, ni, connect))
-                    return self._reconstruct(nodes, len(nodes) - 1)
+                    consider(self._reconstruct(nodes, ni) + connect, node.g + _segs_cost(connect, cfg, params))
 
             for succ_pose, seg in self._successors(node.pose, goal, dtheta_bin):
                 if _fast_segment_collides(cache, seg, obstacles_fast, board_w, board_h, board_margin):
@@ -567,12 +713,16 @@ class NavPlanner:
                 kk = key(succ_pose)
                 if gg + 1e-9 >= best_g.get(kk, math.inf):
                     continue
+                if incumbent is not None and gg + h(succ_pose) >= incumbent_cost - 1e-9:
+                    continue
                 best_g[kk] = gg
                 nodes.append(_Node(succ_pose, gg, ni, [seg]))
                 seq += 1
                 heapq.heappush(openh, (gg + h(succ_pose), seq, len(nodes) - 1))
 
-        self.last_failure = "no path found"
+        if incumbent is not None:
+            return incumbent
+        self.last_failure = reason
         return None
 
     def _reconstruct(self, nodes: list[_Node], idx: int) -> list[Segment]:
@@ -585,10 +735,14 @@ class NavPlanner:
 
     # -- post-search shortcutting -----------------------------------------------------------------
     def _smooth(self, cache: "_FastCache", path: Path, obstacles_fast, board_w: float, board_h: float,
-                board_margin: float) -> Path:
+                board_margin: float, deadline_s: float, t0: float) -> Path:
         segs = path.segments
         i = 0
         while i < len(segs):
+            if time.monotonic() - t0 > deadline_s:
+                # Shortcutting is a bounded, optional optimisation over an already-valid path (Gate 5
+                # finding 7): stop improving rather than blow the deadline, don't fail the whole plan.
+                break
             improved = False
             j = len(segs) - 1
             while j > i + 1:
