@@ -48,13 +48,18 @@ class PID:
         self._d_filt += alpha * (d_meas - self._d_filt)
         self._prev_meas = measurement
 
-        # Conditional-integration anti-windup: evaluate saturation using the OLD integral, then
-        # only fold this step's contribution in if that doesn't drive further into saturation.
-        u_before = self.kp * error + self.ki * self._integral - self.kd * self._d_filt
-        pushing_high = u_before >= self.out_max and error > 0.0
-        pushing_low = u_before <= self.out_min and error < 0.0
+        # Conditional-integration anti-windup: evaluate saturation using the CANDIDATE integral (this
+        # step's contribution already folded in), not just the old one -- checking only the old value
+        # let a single large error*dt jump the integral (and the output) straight through the output
+        # limits before the guard ever saw it (e.g. ki=1, error=1000, dt=0.05 -> integral 0 -> 50 in
+        # one tick against a +-1 limit). Reject (freeze at the old value) whenever the candidate would
+        # overshoot the limit in the direction the error is already pushing.
+        candidate = self._integral + error * dt
+        u_candidate = self.kp * error + self.ki * candidate - self.kd * self._d_filt
+        pushing_high = u_candidate > self.out_max and error > 0.0
+        pushing_low = u_candidate < self.out_min and error < 0.0
         if not (pushing_high or pushing_low):
-            self._integral += error * dt
+            self._integral = candidate
 
         u = self.kp * error + self.ki * self._integral - self.kd * self._d_filt
         return max(self.out_min, min(self.out_max, u))

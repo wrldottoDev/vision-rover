@@ -163,7 +163,7 @@ _RECLUSTER_MAX_TURN_RAD_S = 8.0
 _TENSION_SMOOTH = 0.7
 _TENSION_FLOOR = 0.5
 _TENSION_GAIN = 6.0
-_TENSION_MULT_MAX = 40.0
+_TENSION_MULT_MAX = 8
 
 # TUNED: fault detector independent of the Mahalanobis gate/tension EMA above (see
 # module docstring "Fault tolerance"). Watches EMA(|filtered v/omega - commanded v/w|)
@@ -540,12 +540,18 @@ class PoseEstimator:
         # here. If a distinct DEGRADED ceiling below lost_age_s is wanted, collapse to
         # one extra enum value or repurpose lost_age_s as a separate hard safety floor
         # used only by is_safe_to_drive.
-        if (age > self.policy.lost_age_s or pos_std > self.policy.pos_std_stop_mm
-                or heading_std > self.policy.heading_std_stop_rad
-                or self._path_mm > self.policy.max_blind_travel_mm
-                or self._v_gap_ema > _GAP_V_LOST_MM_S + _GAP_REL * abs(self._cmd_active(t)[0])
-                or self._omega_gap_ema > _GAP_OMEGA_LOST_RAD_S + _GAP_REL * abs(self._cmd_active(t)[1])
-                or t < self._fault_until):
+        v_c, w_c = self._cmd_active(t)
+        reasons = [name for name, bad in (
+            ("age", age > self.policy.lost_age_s),
+            ("pos_std", pos_std > self.policy.pos_std_stop_mm),
+            ("heading_std", heading_std > self.policy.heading_std_stop_rad),
+            ("blind_travel", self._path_mm > self.policy.max_blind_travel_mm),
+            # (lead) velocity-gap criteria removed from the LOST decision after closed-loop tests: with unknown
+            # motor lag + latency they fire on ordinary command steps.  Actuator faults are caught by the
+            # heading-innovation bias latch; the gap EMAs remain available for diagnostics.
+            ("fault_latch", t < self._fault_until)) if bad]
+        self.lost_reasons = reasons
+        if reasons:
             quality = TrackQuality.LOST
         elif age > self.policy.good_age_s:
             quality = TrackQuality.DEGRADED

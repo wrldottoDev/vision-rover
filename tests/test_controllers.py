@@ -288,7 +288,14 @@ def test_push_tracks_line_and_stops_near_goal_under_asymmetry():
     max_cross_mid = 0.0
     for i in range(6000):
         est = rover.estimate()
-        v, w, done, status = pc.step(est, None, 1.0, rover.t)
+        # PushController now requires FRESH cube evidence to drive/finish at all (gate6 G6 finding #8) --
+        # TruthRover has no independent cube model, so feed vision that agrees with the (delayed, noisy)
+        # rover pose's own contact point, same as a real rigidly-pushed cube would. This still exercises
+        # the asymmetry-disturbance-rejection this test is about, just no longer via a cube-less blind
+        # dead-reckoning push (a design the gate audit flagged as unsafe).
+        cube_xy = (est.pose.x + C.contact_distance * math.cos(est.pose.theta),
+                   est.pose.y + C.contact_distance * math.sin(est.pose.theta))
+        v, w, done, status = pc.step(est, cube_xy, 0.05, rover.t)
         max_omega = max(max_omega, abs(w))
         if 40 < status.along_mm < p1[0] - 40:
             max_cross_mid = max(max_cross_mid, abs(status.cross_mm))

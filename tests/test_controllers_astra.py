@@ -269,13 +269,20 @@ def ideal_alignment_trace(cross=24.0):
     for k in range(100):
         v, w, done, phase = ac.step(estimate(x, y, th), k*DT)
         trace.append((x, y, th, phase, done))
-        if done:
+        # "failed"/"reposition" are also terminal (gate6 G6 findings #3/#4): the state machine has
+        # stopped trying, just without claiming success (done stays False). Only "rotating" with
+        # nudges still available, or a nudge in progress, should keep looping.
+        if done or phase in ("failed", "reposition"):
             return trace
         if phase == "nudge_turn":
             th = max(-math.radians(20), min(math.radians(20), math.asin(-y/25)))
         elif phase == "nudge_drive":
-            x += 25*math.cos(th)
-            y += 25*math.sin(th)
+            # Advance in real per-tick increments (matching the controller's own v_capture*DT), not a
+            # single fixed 25 mm jump: the controller may now choose a SHORTER safe nudge distance than
+            # align_nudge_distance (gate6 G6 finding #3, drift-budget-limited nudges), and a one-shot
+            # jump would silently ignore that and always travel the old fixed distance.
+            x += C.limits.v_capture*DT*math.cos(th)
+            y += C.limits.v_capture*DT*math.sin(th)
         elif phase in ("rotating", "nudge_back"):
             th = 0.
     pytest.fail("ideal alignment state machine did not finish")
@@ -386,7 +393,13 @@ def test_push_low_speed_actual_curvature_respects_limit_under_asymmetry():
     pc.reset((0, 0), (400, 0))
     rover = WheelTruth(360 - 77, -10, noise=False, latency=0)
     v, w, _, _ = pc.step(estimate(rover.x, rover.y, 0), (360, -10), 0, 0)
-    assert v == 35 and w == pytest.approx(v/400)
+    # `w == v/400` (the OLD, unfixed assertion) is provably incompatible with the curvature check below:
+    # v/400 is exactly the COMMANDED omega/v cap, but under this truth model's fixed 15% per-wheel gain
+    # asymmetry, commanding it verbatim deterministically settles to curvature ~0.00428 (see gate6 G6
+    # finding #9) -- no controller can satisfy both "w equals the naive cap" and "physical curvature obeys
+    # the limit" for this exact scenario. The fix derates omega below the naive cap so the REALISED
+    # curvature is what respects push_curv_max; assert that contract instead of the old exact value.
+    assert v == 35 and abs(w) <= v/400 + 1e-9
     rover.drive(v, w, .5)
     curvature = abs(rover.omega / rover.v)
     assert curvature <= 1/400 + 1e-6, f"actual curvature {curvature:.5f}, radius {1/curvature:.1f} mm"
@@ -496,4 +509,8 @@ def test_heading_wrap_does_not_create_derivative_kick():
                      Pose(0, 0, -math.pi+.05)))
     _, w1, _ = sf.step(estimate(0, 0, math.pi-.01), 0)
     _, w2, _ = sf.step(estimate(0, 0, -math.pi+.01), DT)
-    assert 0 < w1 < .3 and abs(w2) < .3
+    # Bound raised from .3 to comfortably above the wheel-level rotation deadband (2*15/89 ~= .337 rad/s,
+    # gate6 G6 finding #5): any nonzero in-place rotation command must clear it, so .3 is no longer a
+    # valid "small" ceiling. The point of this test -- no derivative-kick-sized jump from the heading
+    # wrap -- is unaffected.
+    assert 0 < w1 < .4 and abs(w2) < .4

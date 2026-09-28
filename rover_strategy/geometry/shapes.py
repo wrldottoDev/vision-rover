@@ -45,17 +45,29 @@ def _seg_point_dist(a: np.ndarray, b: np.ndarray, p: np.ndarray) -> float:
     return float(np.linalg.norm(a + t * ab - p))
 
 
+def bbox_gap(A: Poly, B: Poly) -> float:
+    """Cheap lower bound of distance(A, B) from axis-aligned bounding boxes (0 if the boxes overlap)."""
+    dx = max(0.0, float(B[:, 0].min() - A[:, 0].max()), float(A[:, 0].min() - B[:, 0].max()))
+    dy = max(0.0, float(B[:, 1].min() - A[:, 1].max()), float(A[:, 1].min() - B[:, 1].max()))
+    return math.hypot(dx, dy)
+
+
+def _pts_segs_min(P: Poly, Q: Poly) -> float:
+    """min distance from points P to the closed polygon boundary Q (vectorised)."""
+    a = Q
+    ab = np.roll(Q, -1, axis=0) - Q                                  # (m,2)
+    ap = P[:, None, :] - a[None, :, :]                               # (n,m,2)
+    den = np.einsum("mk,mk->m", ab, ab)
+    t = np.clip(np.einsum("nmk,mk->nm", ap, ab) / np.where(den > 0, den, 1.0), 0.0, 1.0)
+    d = ap - t[:, :, None] * ab[None, :, :]
+    return float(np.sqrt(np.einsum("nmk,nmk->nm", d, d).min()))
+
+
 def distance(A: Poly, B: Poly) -> float:
     """Euclidean distance between convex polygons; 0 if they intersect."""
     if overlap(A, B):
         return 0.0
-    d = math.inf
-    for P, Q in ((A, B), (B, A)):
-        n = len(Q)
-        for p in P:
-            for i in range(n):
-                d = min(d, _seg_point_dist(Q[i], Q[(i + 1) % n], p))
-    return d
+    return min(_pts_segs_min(A, B), _pts_segs_min(B, A))
 
 
 def point_in(P: Poly, p) -> bool:

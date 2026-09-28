@@ -51,7 +51,10 @@ def independent_check(plan: PushPlan, other_cubes: list[CubeEstimate], board_w: 
     lo_y, hi_y = C.margins.board, board_h - C.margins.board
     clear = C.margins.cube_nav
 
-    for leg in plan.legs:
+    for i_leg, leg in enumerate(plan.legs):
+        # final delivery leg: corridor/retreat may use margins.board_final_leg (lead rule, geometry_model.md)
+        bm = C.margins.board_final_leg if i_leg == len(plan.legs) - 1 else C.margins.board
+        lo_x, hi_x, lo_y, hi_y = bm, board_w - bm, bm, board_h - bm
         pp = leg.prepush
         env = FP.envelope(pp.x, pp.y, pp.theta)
         assert S.inside_rect(env, lo_x, hi_x, lo_y, hi_y), f"prepush envelope outside field: {pp}"

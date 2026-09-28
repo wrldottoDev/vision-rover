@@ -27,7 +27,10 @@ from ..geometry.zones import DepotZone
 from .physics import ContactParams, MotorParams, PhysicsWorld, SimCube, SimRover
 from .sensors import SensorParams, VisionEmulator
 
-FAMILIES = ("start_zone", "arbitrary", "hard")
+FAMILIES = ("start_zone", "arbitrary", "hard", "official_like")
+# official_like: rovers in the start zone, cubes in the interior band like the official example layout
+# (config_simulador.json cubes at internal (520,660),(300,280),(660,340)): [160, 700] mm on both axes.
+OFFICIAL_BAND = (160.0, 700.0)
 COLORS = ("green", "blue", "red")
 
 #: ASSUMED (matches the contract example): every fixed point (start, depots) sits
@@ -249,7 +252,7 @@ def _place_rovers(rng: np.random.Generator, cfg: Config, family: str) -> list[Ro
         # the second one further down the start edge so both are still "near the
         # start corner" but geometrically feasible.
         for rid, base_cell in zip(ROVER_IDS, ((4.0, 4.0), (4.0, 12.0))):
-            if family == "start_zone":
+            if family in ("start_zone", "official_like"):
                 col = base_cell[0] + rng.normal(0.0, 0.3)
                 row = base_cell[1] + rng.normal(0.0, 0.3)
                 x, y, _ = grid.to_internal_pose(col, row, 45.0)
@@ -258,7 +261,9 @@ def _place_rovers(rng: np.random.Generator, cfg: Config, family: str) -> list[Ro
                 # 45deg-rotated envelope (paddle reach makes the sweep radius 113.5mm)
                 # can poke past the field edge. Push the centre inward by the overhang
                 # rather than reject-sampling forever (ponytail: cheap, deterministic).
-                x, y = _clamp_inside_field(fp, x, y, theta, W, H)
+                mb = cfg.margins.board + 1.0          # start inside the planning margin, not on the edge
+                x, y = _clamp_inside_field(fp, x - mb, y - mb, theta, W - 2 * mb, H - 2 * mb)
+                x, y = x + mb, y + mb
             else:
                 margin = fp.sweep_radius + 2.0
                 x = rng.uniform(margin, W - margin)
@@ -285,6 +290,8 @@ def _sample_cube_center(rng: np.random.Generator, cfg: Config, family: str, depo
                          color: str, grid: Grid) -> tuple[float, float]:
     W, H = cfg.board.width, cfg.board.height
     m = cfg.cube.half_diag + 2.0
+    if family == "official_like":
+        return rng.uniform(*OFFICIAL_BAND), rng.uniform(*OFFICIAL_BAND)
     if family != "hard" or rng.random() > GEN.corner_bias_prob:
         return rng.uniform(m, W - m), rng.uniform(m, H - m)
     # hard: bias near a board edge or near this cube's own depot
@@ -321,6 +328,8 @@ def _place_cubes(rng: np.random.Generator, cfg: Config, family: str, rovers: lis
     grid = Grid(cfg.board.cols, cfg.board.rows, cfg.board.cell_mm)
     side = cfg.cube.side
     n = int(rng.integers(2, 4))  # 2 or 3, per contract (R9)
+    if family == "official_like":
+        n = 3                    # the mission under study: three cubes
     colors = [str(c) for c in rng.choice(np.array(COLORS), size=n, replace=False)]
 
     rover_polys = [_rover_polygon(Footprint(cfg.rover), r.x, r.y, r.theta) for r in rovers]

@@ -94,6 +94,7 @@ class AgentContext(Protocol):
     def plan_nav(self, rover_id: int, goal: Pose) -> Path | None: ...
     def commit_path(self, rover_id: int, path: Path, extra: list[np.ndarray]) -> bool: ...
     def commit_region(self, rover_id: int, polygons: list[np.ndarray]) -> bool: ...
+    def shrink_region(self, rover_id: int, remaining: Path, extra: list[np.ndarray]) -> None: ...
     def manipulation_region(self, rover_id: int, start: Pose, heading: float, travel: float) -> list[np.ndarray]: ...
     def path_still_clear(self, rover_id: int, path: Path, from_seg: int) -> bool: ...
     def retreat_clear(self, rover_id: int, pose: Pose, dist: float, target: str | None) -> bool: ...
@@ -288,7 +289,7 @@ class RoverAgent:
         if not safe and self.state not in (S.RELOCALIZE,) and self.state not in PASSIVE:
             if self.state not in INTERRUPTS:
                 self.resume = self.state
-            self._go(S.RELOCALIZE, t, ctx, "estimate unsafe")
+            self._go(S.RELOCALIZE, t, ctx, "estimate unsafe: " + ",".join(getattr(ctx, "lost_reasons", {}).get(self.id, [])))
         v, w = getattr(self, "_s_" + self.state.value.lower())(t, est, safe, ctx)
         if self.state == S.WAIT:
             self.stats.waits_s += dt
@@ -362,7 +363,7 @@ class RoverAgent:
         if self.path is None:
             path = ctx.plan_nav(self.id, goal)
             if path is None:
-                return 0.0, 0.0, "noplan"
+                return 0.0, 0.0, ("blocked" if getattr(ctx, "nav_blocked", {}).get(self.id) else "noplan")
             if not ctx.commit_path(self.id, path, extra):
                 return 0.0, 0.0, "blocked"
             self.path, self.seg_i, self.nav_t0 = path, 0, t
@@ -388,6 +389,8 @@ class RoverAgent:
             if self.seg_i >= len(self.path.segments):
                 return 0.0, 0.0, "arrived"
             self.follow.reset(self.path.segments[self.seg_i])
+            # release the part of the reservation already traversed (shrink only: always safe)
+            ctx.shrink_region(self.id, Path(self.path.segments[self.seg_i:], 0.0), extra)
         return v, w, "moving"
 
     def _leg_region(self, ctx: AgentContext) -> list[np.ndarray]:
@@ -587,6 +590,10 @@ class RoverAgent:
         v, w, done, status = self.pusher.step(est, cube_xy, age, t)
         self.stats.push_cross_track.append(abs(status.cross_mm))
         if status.lost_cube:
+            if obs is not None:
+                xl, yl = est.pose.to_local(float(obs[0][0]), float(obs[0][1]))
+                ctx.log(self.id, "push_lost", depth=round(xl - self.cfg.rover.x_front_plate, 1), lat=round(yl, 1),
+                        age=round(age, 3), n=obs[1], cross=round(status.cross_mm, 1))
             self.stats.capture_failures += 1
             self._fail_task(t, ctx, "cube lost during push")
             return 0.0, 0.0

@@ -23,7 +23,8 @@ from ..frames import wrap
 from ..geometry import shapes
 from ..geometry.footprint import Footprint
 from ..geometry.zones import DepotZone, cube_half_extent
-from ..planning.navigation import DiscObstacle, NavPlanner, PolyObstacle, path_collides, swept_polygons
+from ..planning.navigation import (DiscObstacle, NavPlanner, PolyObstacle, path_collides, pose_collides,
+                                   swept_polygons)
 from ..planning.push_planner import PushPlanner
 from ..planning.reservations import ReservationTable, imminent_collision, priority
 from ..planning.task_allocator import TaskAllocator
@@ -51,7 +52,7 @@ def _inflate(poly: np.ndarray, pad: float, n: int = 12) -> np.ndarray:
 
 @dataclass(frozen=True)
 class SupervisorParams:
-    estop_horizon_s: float = 1.0
+    estop_horizon_s: float = 0.45           # control tick + command latency + braking (not a planning horizon)
     estop_clear_s: float = 0.5
     deadlock_no_progress_s: float = 3.0
     yield_hold_s: float = 25.0
@@ -87,7 +88,10 @@ class Supervisor:
         self.p = params or SupervisorParams()
         self.ids = sorted(rover_ids)
         self.fp = Footprint(cfg.rover)
-        self.nav = NavPlanner(cfg)
+        # Navigation inflates the footprint by pose_uncertainty for EVERYTHING incl. the field edge; reduce its board
+        # margin accordingly so the board contract is identical to the push planner's: true footprint >= margins.board.
+        from dataclasses import replace as _r
+        self.nav = NavPlanner(_r(cfg, margins=_r(cfg.margins, board=cfg.margins.board - cfg.margins.pose_uncertainty)))
         self.pusher = PushPlanner(cfg)
         self.alloc = TaskAllocator(cfg)
         self.res = ReservationTable(cfg)
@@ -109,6 +113,7 @@ class Supervisor:
         self.committed: dict[int, list[np.ndarray]] = {i: [] for i in self.ids}
         self.last_region: dict[int, list[np.ndarray]] = {i: [] for i in self.ids}
         self.cmd: dict[int, tuple[float, float]] = {i: (0.0, 0.0) for i in self.ids}
+        self.nav_blocked: dict[int, bool] = {i: False for i in self.ids}
         self.yield_pairs: dict[int, tuple[int, str | None]] = {}     # yielder -> (keeper, keeper task colour)
         self.events: list[tuple] = []
         self.counters: dict[str, int] = {}
@@ -194,26 +199,36 @@ class Supervisor:
         return out
 
     def _other_region(self, rid: int) -> list[PolyObstacle]:
-        """The other rover's reservation, inflated by the rover-rover margin -- or, if the rovers are already
-        closer than that (start poses), by the current separation minus a little (never plan closer)."""
+        """The other rover's reservation polygons, each inflated by the rover-rover margin -- or, where my
+        envelope is already closer than that to a polygon (start poses, adjacent reservations), by the current
+        distance minus a little: never plan closer to anything than I already am."""
+        mine = self._env_now(rid) if rid in self.est else None
         out = []
         for other in self.ids:
-            if other == rid or other not in self.est:
+            if other == rid:
                 continue
-            d_now = shapes.distance(self._env_now(rid), self._env_now(other))
-            pad = min(self.cfg.margins.rover_rover, max(0.0, d_now - 3.0))
             for q in self.res.polygons_of(other):
+                if mine is None or shapes.bbox_gap(mine, q) > 400.0:
+                    out.append(PolyObstacle(_inflate(q, self.cfg.margins.rover_rover)))
+                    continue
+                pad = min(self.cfg.margins.rover_rover, max(0.0, shapes.distance(mine, q) - 3.0))
                 out.append(PolyObstacle(_inflate(q, pad)))
         return out
 
-    def plan_nav(self, rid: int, goal: Pose, ignore_other: bool = False, deadline_s: float = 0.4):
+    def plan_nav(self, rid: int, goal: Pose, ignore_other: bool = False, deadline_s: float = 1.5):
+        """ponytail: planning runs synchronously inside tick(); fine in simulation (sim time is frozen while we
+        compute) but a real deployment must run it in a worker thread and re-check freshness before commanding."""
         start = self.est[rid].estimate(self.t).pose
         task = self.agents[rid].task
-        obs = self._cube_obstacles(target=task.color if task else None) + \
-            ([] if ignore_other else self._other_region(rid))
+        cubes = self._cube_obstacles(target=task.color if task else None)
+        obs = cubes + ([] if ignore_other else self._other_region(rid))
         path = self.nav.plan(start, goal, obs, self.board_w, self.board_h, deadline_s=deadline_s)
+        self.nav_blocked[rid] = False
         if path is None:
             self.log(rid, "nav_fail", why=self.nav.last_failure)
+            if not ignore_other and self.nav.plan(start, goal, cubes, self.board_w, self.board_h,
+                                                  deadline_s=deadline_s) is not None:
+                self.nav_blocked[rid] = True        # only the other rover is in the way: that is WAIT, not failure
         return path
 
     def _cube_list(self, exclude: str | None) -> list[CubeEstimate]:
@@ -249,18 +264,26 @@ class Supervisor:
         return self.fp.envelope(p.x, p.y, p.theta)
 
     def _conflict(self, rid: int, polys: list[np.ndarray]) -> bool:
-        """Does `polys` come within the rover-rover margin of the other rover's reservation?  If the two
-        rovers are ALREADY closer than the margin (e.g. start poses), motion is allowed as long as it does not
-        reduce the current envelope-to-envelope separation."""
+        """Does `polys` come within the rover-rover margin of the other rover's reservation?  Where my current
+        envelope is already closer than the margin to one of its polygons, the threshold for that polygon is the
+        current distance (minus the polygon-approximation tolerance): motion may not bring us closer."""
         margin = self.cfg.margins.rover_rover
+        mine = self._env_now(rid)
         for other in self.ids:
             if other == rid or other not in self.est:
                 continue
-            d_now = shapes.distance(self._env_now(rid), self._env_now(other))
-            thr = min(margin, max(0.0, d_now - 2.0))
             for q in self.res.polygons_of(other):
-                for p in polys:
-                    if shapes.distance(p, q) < thr:
+                d_now = shapes.distance(mine, q)
+                thr = max(0.0, min(margin, max(0.0, d_now - 3.0)) - 4.0)
+                if thr <= 0.0 and d_now > 0.0:
+                    thr = 0.0
+                for i_p, p in enumerate(polys):
+                    if shapes.bbox_gap(p, q) >= max(thr, 1e-9):
+                        continue
+                    dpq = shapes.distance(p, q)
+                    if dpq < thr or (thr == 0.0 and shapes.overlap(p, q) and d_now > 0.0):
+                        self.last_conflict = (i_p, len(polys),
+                                              round(dpq, 1), round(thr, 1), round(d_now, 1))
                         return True
         return False
 
@@ -268,29 +291,59 @@ class Supervisor:
         region = list(polygons) + [self._env_now(rid)]
         if self._conflict(rid, region):
             self._count("commit_denied")
+            self.log(rid, "commit_denied", why=getattr(self, "last_conflict", None))
             return False
         self.committed[rid] = region
         self.res.reserve(rid, region, priority(self.agents[rid].priority_state(), rid), self.t)
         return True
 
     def commit_path(self, rid: int, path: Path, extra: list[np.ndarray]) -> bool:
-        return self._commit(rid, swept_polygons(self.fp, path) + list(extra))
+        """The path itself was planned in this same tick with the other rover's reservation as obstacles (exact
+        planner collision checks), so only the extra (manipulation) regions need the reservation conflict test;
+        re-testing the conservatively padded sweep polygons would reject every move of rovers starting < margin
+        apart."""
+        if self._conflict(rid, list(extra)):
+            self._count("commit_denied")
+            self.log(rid, "commit_denied", why=getattr(self, "last_conflict", None))
+            return False
+        region = swept_polygons(self.fp, path) + list(extra) + [self._env_now(rid)]
+        self.committed[rid] = region
+        self.res.reserve(rid, region, priority(self.agents[rid].priority_state(), rid), self.t)
+        return True
+
+    def shrink_region(self, rid: int, remaining: Path, extra: list[np.ndarray]) -> None:
+        """Replace the committed region by the sweep of the REMAINING path (+extra) and the current envelope.
+        Only ever shrinks the claim, so no conflict check is needed."""
+        region = swept_polygons(self.fp, remaining) + list(extra) + [self._env_now(rid)]
+        self.committed[rid] = region
+        self.res.reserve(rid, region, priority(self.agents[rid].priority_state(), rid), self.t)
 
     def commit_region(self, rid: int, polygons: list[np.ndarray]) -> bool:
         return self._commit(rid, self.committed.get(rid, []) + list(polygons))
 
     def path_still_clear(self, rid: int, path: Path, from_seg: int) -> bool:
-        """Revalidate the rest of a committed path in the planning context (cubes, obstacles, other rover's
-        reservation, board margin).  The segment being executed is only checked against hard contact, since the
-        rover may legitimately be inside inflation margins while escaping or finishing it."""
+        """Revalidate the rest of a committed path in the planning context (cubes incl. the tighter target
+        margin, obstacles, other rover's reservation, footprint inflation, board margin).  If the rover is
+        currently inside a margin (e.g. it is escaping), the segment being executed is only checked against hard
+        contact; everything after it gets the full planning contract."""
+        task = self.agents[rid].task if rid in self.agents else None
+        cubes = self._cube_obstacles(target=task.color if task else None)
+        full = cubes + self._other_region(rid)
+        fpi = Footprint(self.cfg.rover, inflate=self.cfg.margins.pose_uncertainty)
         cur = Path(path.segments[from_seg:from_seg + 1], 0.0)
         rest = Path(path.segments[from_seg + 1:], 0.0)
-        hard = [DiscObstacle(c.x, c.y, c.r - self.cfg.margins.cube_nav) for c in self._cube_obstacles()]
-        if cur.segments and path_collides(self.fp, cur, hard, self.board_w, self.board_h, 0.0):
-            return False
-        full = self._cube_obstacles() + self._other_region(rid)
-        return not (rest.segments and path_collides(self.fp, rest, full, self.board_w, self.board_h,
-                                                    self.cfg.margins.board))
+        pose = self.est[rid].estimate(self.t).pose if rid in self.est else None
+        bm = self.cfg.margins.board - self.cfg.margins.pose_uncertainty     # same contract as self.nav
+        inside_margins = pose is None or not pose_collides(fpi, pose, full, self.board_w, self.board_h, bm)
+        if cur.segments:
+            if inside_margins:
+                if path_collides(fpi, cur, full, self.board_w, self.board_h, bm):
+                    return False
+            else:
+                hard = [DiscObstacle(c.x, c.y, c.r - self.cfg.margins.cube_nav) for c in cubes]
+                if path_collides(self.fp, cur, hard, self.board_w, self.board_h, 0.0):
+                    return False
+        return not (rest.segments and path_collides(fpi, rest, full, self.board_w, self.board_h, bm))
 
     def retreat_clear(self, rid: int, pose: Pose, dist: float, target: str | None) -> bool:
         sweep = self.fp.straight_sweep(pose.x, pose.y, pose.theta, -dist)
@@ -375,6 +428,7 @@ class Supervisor:
         if self.t_running is None:
             self.t_running = t
         safe = {rid: self.est[rid].is_safe_to_drive(t) for rid in self.ids}
+        self.lost_reasons = {rid: getattr(self.est[rid], "lost_reasons", []) for rid in self.ids}
 
         self._refresh_reservations(ests, safe)
         self._monitor_deliveries(t)
@@ -544,15 +598,13 @@ class Supervisor:
                                 self.fp.envelope(eb.pose.x, eb.pose.y, eb.pose.theta))
 
         def hit() -> bool:
-            # both the estimated current motion and the commanded motion are rolled out; rovers already closer
-            # than the estop margin (start poses) only trigger if the rollout brings them closer still.
+            # Last-resort layer: roll out both the estimated current motion and the commanded motion.  Trigger when
+            # the predicted envelope separation drops below the estop margin -- or, for rovers already closer than
+            # that (start poses), when it would shrink materially below the current separation.
             A = [ea, self._with_cmd(ea, self.cmd[a_id])]
             B = [eb, self._with_cmd(eb, self.cmd[b_id])]
-            if not any(imminent_collision(x, y, self.p.estop_horizon_s, self.cfg) for x in A for y in B):
-                return False
-            if d_now > self.cfg.margins.rover_rover_estop + 5.0:
-                return True
-            return _min_sep(self.fp, A, B, self.p.estop_horizon_s) < d_now - 1.0
+            thr = min(self.cfg.margins.rover_rover_estop, max(0.0, d_now - 8.0))
+            return _min_sep(self.fp, A, B, self.p.estop_horizon_s) < thr
 
         if (self.cmd[a_id] != (0.0, 0.0) or self.cmd[b_id] != (0.0, 0.0)) and hit():
             pa = priority(self.agents[a_id].priority_state(), a_id)

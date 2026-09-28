@@ -90,7 +90,7 @@ class DepotConfig:
     # i.e. the 100x100 corner square of the effective field. Delivered = whole cube footprint inside.
     half_size: float = 50.0
     # Margin kept between the planned cube footprint and the depot border (vision bias + push error).
-    delivery_margin: float = 6.0
+    delivery_margin: float = 3.0             # TUNED: 6 mm left a 2.25 mm feasible band along edges
     # Consecutive stationary frames that must satisfy the criterion before declaring delivery.
     confirm_frames: int = 6
 
@@ -98,6 +98,9 @@ class DepotConfig:
 @dataclass(frozen=True)
 class Margins:
     board: float = 12.0                      # rover footprint to board edge (planning)
+    # Final delivery leg only: along an edge into a corner depot the rover (half width 49.75) must run within a
+    # few mm of the edge -- with 12 mm the feasible band is 2.25 mm wide (docs/geometry_model.md).  TUNED.
+    board_final_leg: float = 5.0
     cube_nav: float = 14.0                   # rover envelope to non-target cube (planning)
     rover_rover: float = 45.0                # reservation inflation between rovers
     rover_rover_estop: float = 15.0          # hard emergency stop distance between footprints
@@ -135,8 +138,8 @@ class TelemetryPolicy:
 class EstimatorConfig:
     meas_pos_std: float = 2.0                # mm, per-frame vision position noise model
     meas_heading_std: float = math.radians(1.5)
-    accel_noise: float = 400.0               # mm/s^2 random-walk on v
-    alpha_noise: float = 6.0                 # rad/s^2 random-walk on omega
+    accel_noise: float = 120.0               # mm/s^2 random-walk on v (TUNED in closed loop sim, tools/est_closed_check.py)
+    alpha_noise: float = 1.2                 # rad/s^2 random-walk on omega (TUNED likewise)
     cmd_tau: float = 0.12                    # s, first-order response of (v, w) to commands
     gate_chi2: float = 16.0                  # Mahalanobis^2 gate (3 dof)
     max_consecutive_rejects: int = 5         # then re-initialise from vision

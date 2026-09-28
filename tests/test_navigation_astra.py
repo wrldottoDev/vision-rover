@@ -387,7 +387,7 @@ def test_supervisor_revalidation_preserves_planning_contract(case):
     else:
         supervisor.res.reserve(2, [rect(420, 450, 250, 350)], 1, 0)
     path = Path([Segment(SegKind.STRAIGHT, start, end)], 1)
-    supervisor._cube_obstacles = lambda: obstacles
+    supervisor._cube_obstacles = lambda *a, **k: obstacles   # (lead: signature gained exclude/target kwargs)
     all_obstacles = obstacles + supervisor._other_region(1)
     assert first_collision(path, all_obstacles, C.margins.pose_uncertainty, C.margins.board) is not None
     assert not supervisor.path_still_clear(1, path, 0), f"revalidation dropped {case}"

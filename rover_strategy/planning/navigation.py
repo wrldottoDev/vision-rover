@@ -245,28 +245,36 @@ def _fast_disc_hit(pts: list[tuple[float, float]], cx: float, cy: float, r: floa
     return False
 
 
-def _fast_overlap(A: list[tuple[float, float]], B: list[tuple[float, float]], pad: float = 0.0) -> bool:
-    """True if convex A, B are within `pad` of touching (pad=0 -> plain SAT overlap)."""
-    for P, Q in ((A, B), (B, A)):
-        n = len(P)
-        for i in range(n):
-            x1, y1 = P[i]
-            x2, y2 = P[(i + 1) % n]
-            nx, ny = -(y2 - y1), x2 - x1
-            L = math.hypot(nx, ny)
-            if L < 1e-12:
-                continue
-            nx, ny = nx / L, ny / L
-            amin = amax = P[0][0] * nx + P[0][1] * ny
-            for (px, py) in P[1:]:
-                d = px * nx + py * ny
-                amin, amax = min(amin, d), max(amax, d)
-            bmin = bmax = Q[0][0] * nx + Q[0][1] * ny
-            for (px, py) in Q[1:]:
-                d = px * nx + py * ny
-                bmin, bmax = min(bmin, d), max(bmax, d)
-            if amax < bmin - pad or bmax < amin - pad:
-                return False
+def _poly_axes(P: list[tuple[float, float]]) -> list[tuple[float, float]]:
+    axes = []
+    n = len(P)
+    for i in range(n):
+        x1, y1 = P[i]
+        x2, y2 = P[(i + 1) % n]
+        nx, ny = -(y2 - y1), x2 - x1
+        L = math.hypot(nx, ny)
+        if L > 1e-12:
+            axes.append((nx / L, ny / L))
+    return axes
+
+
+def _fast_overlap(A: list[tuple[float, float]], B: list[tuple[float, float]], pad: float = 0.0,
+                   axes_b: list[tuple[float, float]] | None = None) -> bool:
+    """True if convex A, B are within `pad` of touching (pad=0 -> plain SAT overlap). `axes_b`, when
+    given, is B's precomputed edge-normal axes (obstacles are static within a `plan()` call -- no need
+    to re-derive and re-normalise the same normals on every one of the ~1e4-1e5 hot-loop checks)."""
+    axes = _poly_axes(A) + (list(axes_b) if axes_b is not None else _poly_axes(B))
+    for nx, ny in axes:
+        amin = amax = A[0][0] * nx + A[0][1] * ny
+        for (px, py) in A[1:]:
+            d = px * nx + py * ny
+            amin, amax = min(amin, d), max(amax, d)
+        bmin = bmax = B[0][0] * nx + B[0][1] * ny
+        for (px, py) in B[1:]:
+            d = px * nx + py * ny
+            bmin, bmax = min(bmin, d), max(bmax, d)
+        if amax < bmin - pad or bmax < amin - pad:
+            return False
     return True
 
 
@@ -315,13 +323,28 @@ class _FastCache:
 
 
 def _fast_obstacles(obstacles: Sequence[Obstacle]):
+    """Precompute what stays constant across the ~1e4-1e5 hot-loop checks in one `plan()` call: for a
+    poly obstacle, its bounding circle (cheap reject before a full SAT test, see `_obstacle_far`) and
+    its edge-normal axes (so `_fast_overlap` never re-derives them)."""
     out = []
     for o in obstacles:
         if isinstance(o, DiscObstacle):
             out.append(("d", o.x, o.y, o.r))
         else:
-            out.append(("p", [(float(p[0]), float(p[1])) for p in o.poly]))
+            pts = [(float(p[0]), float(p[1])) for p in o.poly]
+            cx = sum(p[0] for p in pts) / len(pts)
+            cy = sum(p[1] for p in pts) / len(pts)
+            rb = max(math.hypot(px - cx, py - cy) for px, py in pts)
+            out.append(("p", pts, cx, cy, rb, _poly_axes(pts)))
     return out
+
+
+def _obstacle_far(cx: float, cy: float, reach: float, o, pad: float = 0.0) -> bool:
+    """Cheap bounding-circle reject: True if `o` cannot possibly be within `pad` of a shape all of
+    whose points are within `reach` of (cx, cy). Skips the full disc/SAT test for obstacles nowhere
+    near the current sweep -- the common case with many other-rover reservation polygons."""
+    ocx, ocy, orb = (o[1], o[2], o[3]) if o[0] == "d" else (o[2], o[3], o[4])
+    return math.hypot(cx - ocx, cy - ocy) > reach + orb + pad
 
 
 def _fast_pose_collides(cache: _FastCache, pose: Pose, obstacles_fast, board_w: float, board_h: float,
@@ -334,10 +357,12 @@ def _fast_pose_collides(cache: _FastCache, pose: Pose, obstacles_fast, board_w: 
     if min(ys) < board_margin or max(ys) > board_h - board_margin:
         return True
     for o in obstacles_fast:
+        if _obstacle_far(pose.x, pose.y, cache.sweep_radius, o):
+            continue
         if o[0] == "d":
             if _fast_disc_hit(poly, o[1], o[2], o[3]):
                 return True
-        elif _fast_overlap(poly, o[1]):
+        elif _fast_overlap(poly, o[1], axes_b=o[5]):
             return True
     return False
 
@@ -353,6 +378,14 @@ def _fast_segment_collides(cache: _FastCache, seg: Segment, obstacles_fast, boar
         step = dtheta / n
         pad = _arc_pad(cache.sweep_radius, step)
         eff_margin = board_margin + pad
+        # Whole-rotation early-out: every swept point lies within sweep_radius of the centre.
+        r_all = cache.sweep_radius + pad
+        cx0, cy0 = seg.start.x, seg.start.y
+        near = [o for o in obstacles_fast if not _obstacle_far(cx0, cy0, cache.sweep_radius, o, pad)]
+        if not near and (cx0 - r_all >= board_margin and cx0 + r_all <= board_w - board_margin
+                         and cy0 - r_all >= board_margin and cy0 + r_all <= board_h - board_margin):
+            return False
+        obstacles_fast = near
         prev = cache.poly(seg.start.x, seg.start.y, seg.start.theta)
         for k in range(1, n + 1):
             th = wrap(seg.start.theta + step * k)
@@ -365,23 +398,33 @@ def _fast_segment_collides(cache: _FastCache, seg: Segment, obstacles_fast, boar
             if min(ys) < eff_margin or max(ys) > board_h - eff_margin:
                 return True
             for o in obstacles_fast:
+                if _obstacle_far(seg.start.x, seg.start.y, cache.sweep_radius, o, pad):
+                    continue
                 if o[0] == "d":
                     if _fast_disc_hit(hull_pts, o[1], o[2], o[3], pad):
                         return True
-                elif _fast_overlap(hull_pts, o[1], pad):
+                elif _fast_overlap(hull_pts, o[1], pad, axes_b=o[5]):
                     return True
             prev = cur
         return False
     a = cache.poly(seg.start.x, seg.start.y, seg.start.theta)
     b = cache.poly(seg.end.x, seg.end.y, seg.end.theta)
-    poly = S.hull(np.array(a + b))
-    if _poly_out_of_board(poly, board_w, board_h, board_margin):
+    poly = _fast_hull(a + b)
+    xs = [p[0] for p in poly]
+    ys = [p[1] for p in poly]
+    if min(xs) < board_margin or max(xs) > board_w - board_margin:
         return True
+    if min(ys) < board_margin or max(ys) > board_h - board_margin:
+        return True
+    mx, my = (seg.start.x + seg.end.x) / 2.0, (seg.start.y + seg.end.y) / 2.0
+    reach = cache.sweep_radius + seg.length / 2.0
     for o in obstacles_fast:
+        if _obstacle_far(mx, my, reach, o):
+            continue
         if o[0] == "d":
-            if S.disc_distance(poly, (o[1], o[2]), o[3]) <= 0.0:
+            if _fast_disc_hit(poly, o[1], o[2], o[3]):
                 return True
-        elif S.overlap(poly, np.array(o[1])):
+        elif _fast_overlap(poly, o[1], axes_b=o[5]):
             return True
     return False
 
@@ -434,7 +477,11 @@ def _segs_cost(segs: Sequence[Segment], cfg: Config, params: NavParams) -> float
     total = 0.0
     for s in segs:
         if s.kind is SegKind.ROTATE:
-            total += abs(angle_diff(s.end.theta, s.start.theta)) / cfg.limits.w_nav + params.rotate_settle_s
+            dtheta = abs(angle_diff(s.end.theta, s.start.theta))
+            # A zero-angle ROTATE is the "already at goal" no-op marker (Gate 5 finding 4): it costs
+            # nothing to execute, so it must not carry the per-rotation settle overhead either.
+            settle = 0.0 if dtheta <= 1e-9 else params.rotate_settle_s
+            total += dtheta / cfg.limits.w_nav + settle
         else:
             c = s.length / cfg.limits.v_nav
             if s.reverse:
@@ -473,7 +520,10 @@ class NavPlanner:
         prefix: list[Segment] = []
         search_start = start
         if _fast_pose_collides(cache, start, obstacles_fast, board_w, board_h, board_margin):
-            if _fast_pose_collides(cache0, start, obstacles_fast, board_w, board_h, board_margin):
+            # Zero board margin here too (not the safety `board_margin`): a start pose within the
+            # margin of the physical edge, but still on the actual field, is a safety-margin artifact
+            # like any inflated-obstacle-only collision, not a real collision escape can't fix.
+            if _fast_pose_collides(cache0, start, obstacles_fast, board_w, board_h, 0.0):
                 self.last_failure = "start pose in collision (uninflated)"
                 return None
             # One absolute deadline covers every phase (Gate 5 finding 7): check it before starting the
@@ -499,6 +549,7 @@ class NavPlanner:
         if result is None:
             return None  # last_failure already set by _search
 
+        prefix_len = len(prefix)
         segs = prefix + result
         if not segs:
             # Start already at goal (within tolerance): a well-formed, trivially-done path (`.goal`
@@ -507,26 +558,44 @@ class NavPlanner:
             # follower/FSM that watches for start==end.
             segs = [Segment(SegKind.ROTATE, search_start, search_start)]
         path = Path(segments=segs, cost_s=_segs_cost(segs, cfg, params))
-        path = self._smooth(cache, path, obstacles_fast, board_w, board_h, board_margin, deadline_s, t0)
+        path = self._smooth(cache, path, obstacles_fast, board_w, board_h, board_margin, deadline_s, t0,
+                             prefix_len)
 
         # Final validation with the PUBLIC (numpy) collision checker (Gate 5 finding 9): catches any
-        # internal fast-path bug before a colliding path is ever handed back to a caller.
-        if path_collides(fp, path, obstacles, board_w, board_h, board_margin):
+        # internal fast-path bug before a colliding path is ever handed back to a caller. The escape
+        # prefix (if any, always the leading `prefix_len` segments -- smoothing never reaches into it,
+        # see `_smooth`) only ever promised zero-inflation/zero-board-margin safety, not the normal
+        # safety-margined one, so it's re-validated against that same, weaker contract.
+        prefix_segs, rest_segs = path.segments[:prefix_len], path.segments[prefix_len:]
+        if any(segment_collides(fp0, s, obstacles, board_w, board_h, 0.0) for s in prefix_segs):
+            self.last_failure = "internal error: escape path failed public re-validation"
+            return None
+        if any(segment_collides(fp, s, obstacles, board_w, board_h, board_margin) for s in rest_segs):
             self.last_failure = "internal error: planned path failed public re-validation"
             return None
         return path
 
     # -- start-in-collision escape -------------------------------------------------------------
+    # TUNED: a real obstacle can sit close enough that only a sub-degree/sub-mm move is genuinely
+    # collision-free and clearance-improving (a full-size move's continuous sweep grazes it even
+    # though both endpoints look fine) -- see Gate 5 "escape drives into a real cube". Offering a
+    # ladder of shrinking magnitudes lets the escape fall back to a fine step when the coarse one is
+    # blocked, while still preferring the coarse (faster-converging) one when it's actually safe.
+    _ESCAPE_SCALES = (1.0, 1.0 / 4.0, 1.0 / 16.0, 1.0 / 64.0)
+
     def _escape_moves(self, p: Pose) -> list[tuple[Pose, Segment]]:
-        step, ang = self.params.escape_step_mm, self.params.escape_rotate_rad
-        fwd, rev = p.moved(step), p.moved(-step)
-        rot_p, rot_m = p.rotated_to(wrap(p.theta + ang)), p.rotated_to(wrap(p.theta - ang))
-        return [
-            (fwd, Segment(SegKind.STRAIGHT, p, fwd, reverse=False)),
-            (rev, Segment(SegKind.STRAIGHT, p, rev, reverse=True)),
-            (rot_p, Segment(SegKind.ROTATE, p, rot_p)),
-            (rot_m, Segment(SegKind.ROTATE, p, rot_m)),
-        ]
+        out = []
+        for scale in self._ESCAPE_SCALES:
+            step, ang = self.params.escape_step_mm * scale, self.params.escape_rotate_rad * scale
+            fwd, rev = p.moved(step), p.moved(-step)
+            rot_p, rot_m = p.rotated_to(wrap(p.theta + ang)), p.rotated_to(wrap(p.theta - ang))
+            out += [
+                (fwd, Segment(SegKind.STRAIGHT, p, fwd, reverse=False)),
+                (rev, Segment(SegKind.STRAIGHT, p, rev, reverse=True)),
+                (rot_p, Segment(SegKind.ROTATE, p, rot_p)),
+                (rot_m, Segment(SegKind.ROTATE, p, rot_m)),
+            ]
+        return out
 
     def _escape(self, cache: "_FastCache", cache0: "_FastCache", fp0: Footprint, pose: Pose,
                 obstacles: Sequence[Obstacle], board_w: float, board_h: float, board_margin: float,
@@ -551,7 +620,9 @@ class NavPlanner:
                     if cand in seen:
                         continue
                     seen.add(cand)
-                    if _fast_segment_collides(cache0, seg, obstacles_fast, board_w, board_h, board_margin):
+                    # Zero board margin (not `board_margin`): the escape only has to never truly cross
+                    # the physical edge, exactly like it only has to never truly touch an obstacle.
+                    if _fast_segment_collides(cache0, seg, obstacles_fast, board_w, board_h, 0.0):
                         continue
                     cc = _clearance(fp0, cand, obstacles, board_w, board_h)
                     if cc <= c + 1e-9:
@@ -735,9 +806,13 @@ class NavPlanner:
 
     # -- post-search shortcutting -----------------------------------------------------------------
     def _smooth(self, cache: "_FastCache", path: Path, obstacles_fast, board_w: float, board_h: float,
-                board_margin: float, deadline_s: float, t0: float) -> Path:
+                board_margin: float, deadline_s: float, t0: float, prefix_len: int = 0) -> Path:
         segs = path.segments
-        i = 0
+        # Never shortcut starting from within the escape prefix (`prefix_len` leading segments): those
+        # poses are only promised zero-inflation-safe, but `_analytic_connect` checks candidates against
+        # the normal inflated `cache` -- mixing the two contracts would let a still-margin-violating
+        # escape pose get silently absorbed into a "safety-margin-clean" shortcut.
+        i = prefix_len
         while i < len(segs):
             if time.monotonic() - t0 > deadline_s:
                 # Shortcutting is a bounded, optional optimisation over an already-valid path (Gate 5

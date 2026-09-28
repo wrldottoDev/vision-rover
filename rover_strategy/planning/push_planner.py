@@ -38,6 +38,10 @@ from ..world import CubeEstimate, Pose, PushLeg, PushPlan
 class PushParams:
     """Tunables owned by this module (not in the frozen shared Config).  All ASSUMED/TUNED --
     flag for centralisation once real hardware timing / capture-rate data exists."""
+    # Legs that START at a planned intermediate point get this much extra field margin: the cube never lands
+    # exactly where planned (push stop error, slip), and a plan that is feasible only at the exact planned
+    # point fails on replan (lead, closed-loop finding).  TUNED.
+    intermediate_slack_mm: float = 10.0
 
     # ASSUMED: minimum push distance for the cube to travel far enough to square flush against the
     # plate (rather than just kiss it).  Shorter "legs" are rejected as not physically meaningful.
@@ -166,7 +170,8 @@ def prepush_pose(cfg: Config, cube_xy: tuple[float, float], heading: float) -> P
 
 def leg_feasible(cfg: Config, fp: Footprint, cube_xy: tuple[float, float], alpha: float | None,
                   heading: float, length: float, other_cubes: Sequence[CubeEstimate],
-                  board_w: float, board_h: float) -> tuple[bool, str]:
+                  board_w: float, board_h: float, extra_margin: float = 0.0,
+                  final_leg: bool = False) -> tuple[bool, str]:
     """Is a single straight push leg (cube_xy -> cube_xy + length*heading) physically executable?
 
     Checks, all against the no-walls field [margins.board, board_w/h - margins.board]:
@@ -195,8 +200,9 @@ def leg_feasible(cfg: Config, fp: Footprint, cube_xy: tuple[float, float], alpha
     contact = cfg.contact_distance
     rx, ry = cx - contact * hx, cy - contact * hy
 
-    lo_x, hi_x = cfg.margins.board, board_w - cfg.margins.board
-    lo_y, hi_y = cfg.margins.board, board_h - cfg.margins.board
+    bm = (cfg.margins.board_final_leg if final_leg else cfg.margins.board) + extra_margin
+    lo_x, hi_x = bm, board_w - bm
+    lo_y, hi_y = bm, board_h - bm
 
     # The rover sweeps from the PRE-PUSH pose (capture approach) through contact to the leg end.
     approach = cfg.prepush_distance - contact
@@ -247,7 +253,8 @@ def leg_feasible(cfg: Config, fp: Footprint, cube_xy: tuple[float, float], alpha
 
 
 def _prepush_ok(cfg: Config, fp: Footprint, pose: Pose, target_xy: tuple[float, float],
-                 other_cubes: Sequence[CubeEstimate], board_w: float, board_h: float) -> bool:
+                 other_cubes: Sequence[CubeEstimate], board_w: float, board_h: float,
+                 extra_margin: float = 0.0) -> bool:
     """Pre-push pose: envelope inside the field (the general "pre-push pose" containment rule),
     AND the full in-place rotation-sweep circle clear of every other cube -- including the target
     cube at its current (intermediate) position -- per the MULTI-LEG "must be able to rotate at the
@@ -256,8 +263,11 @@ def _prepush_ok(cfg: Config, fp: Footprint, pose: Pose, target_xy: tuple[float, 
     phases -- pre-push pose, push, retreat -- must; a board-edge-clipping in-place spin between two
     otherwise-legal poses is not one of them).  cfg.prepush_distance is built to already guarantee
     clearance from the target cube itself; the check against it below is a cheap sanity assertion."""
-    lo_x, hi_x = cfg.margins.board, board_w - cfg.margins.board
-    lo_y, hi_y = cfg.margins.board, board_h - cfg.margins.board
+    # Board contract (same as navigation, whose board margin is reduced by its footprint inflation): the TRUE
+    # footprint keeps margins.board from the field edge (lead, closed-loop finding).
+    m = cfg.margins.board + extra_margin
+    lo_x, hi_x = m, board_w - m
+    lo_y, hi_y = m, board_h - m
     env = fp.envelope(pose.x, pose.y, pose.theta)
     if not S.inside_rect(env, lo_x, hi_x, lo_y, hi_y):
         return False
@@ -502,28 +512,37 @@ _LegAttempt = tuple[PushLeg, float, float, float]   # leg, resulting_alpha, cost
 
 def _leg_attempt(cfg: Config, fp: Footprint, start_xy: tuple[float, float], entering_alpha: float | None,
                   entering_alpha_std: float, end_xy: tuple[float, float], other_cubes: Sequence[CubeEstimate],
-                  board_w: float, board_h: float, params: PushParams) -> _LegAttempt | None:
+                  board_w: float, board_h: float, params: PushParams, slack: float = 0.0,
+                  final_leg: bool = False) -> _LegAttempt | None:
     dx, dy = end_xy[0] - start_xy[0], end_xy[1] - start_xy[1]
     length = math.hypot(dx, dy)
     if length < 1e-6:
         return None
     heading = math.atan2(dy, dx)
 
-    if entering_alpha is not None:
+    window = math.radians(cfg.planner.push_heading_window_deg)
+    if entering_alpha is not None and 2.0 * entering_alpha_std < 0.5 * window:
+        # Orientation known well enough to enforce the H-11 window.
         d = _worst_face_normal_offset(heading, entering_alpha, entering_alpha_std)
-        if math.degrees(d) > cfg.planner.push_heading_window_deg:
+        if d > window:
             return None
         leg_risk = _capture_risk(cfg, d)
+    elif entering_alpha is not None:
+        # Poorly known orientation: a hard window would forbid every heading.  Use the belief as a soft prior:
+        # expected capture risk over "aligned as believed" vs worst case (lead fix, closed-loop finding).
+        d = _angle_to_face_normal(heading, entering_alpha)
+        leg_risk = 0.5 * _capture_risk(cfg, d) + 0.5 * _capture_risk(cfg, min(math.pi / 4, d + 2 * entering_alpha_std))
     else:
         near90 = _angle_to_face_normal(heading, 0.0)
         leg_risk = (params.grid_align_confidence * _capture_risk(cfg, near90)
                     + (1.0 - params.grid_align_confidence) * _capture_risk(cfg, math.pi / 4.0))
 
-    ok, _why = leg_feasible(cfg, fp, start_xy, entering_alpha, heading, length, other_cubes, board_w, board_h)
+    ok, _why = leg_feasible(cfg, fp, start_xy, entering_alpha, heading, length, other_cubes, board_w, board_h, slack,
+                            final_leg)
     if not ok:
         return None
     pre = prepush_pose(cfg, start_xy, heading)
-    if not _prepush_ok(cfg, fp, pre, start_xy, other_cubes, board_w, board_h):
+    if not _prepush_ok(cfg, fp, pre, start_xy, other_cubes, board_w, board_h, slack):
         return None
 
     result_alpha = wrap_to_pm45(heading)
@@ -565,7 +584,8 @@ class PushPlanner:
         def try_final(legs: list[PushLeg], prior_cost: float, prior_risks: list[float],
                       leg_start: tuple[float, float], entering_alpha: float | None, entering_std: float,
                       D: tuple[float, float], tag: str) -> None:
-            att = _leg_attempt(cfg, fp, leg_start, entering_alpha, entering_std, D, others, board_w, board_h, p)
+            att = _leg_attempt(cfg, fp, leg_start, entering_alpha, entering_std, D, others, board_w, board_h, p,
+                               final_leg=True)
             if att is None:
                 return
             leg, alpha_final, cost, leg_risk = att
@@ -624,7 +644,7 @@ class PushPlanner:
                         if budget_left() <= 0:
                             break
                         att_mid = _leg_attempt(cfg, fp, I1, alpha1, p.post_push_alpha_std, I2, others,
-                                                board_w, board_h, p)
+                                                board_w, board_h, p, slack=p.intermediate_slack_mm)
                         if att_mid is None:
                             continue
                         leg2, alpha2, cost2, risk2 = att_mid
