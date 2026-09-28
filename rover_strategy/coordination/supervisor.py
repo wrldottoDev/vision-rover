@@ -619,7 +619,10 @@ class Supervisor:
             # which may only move back in (closed-loop finding: a rover drifting out kept pushing outward).
             e0 = -self.overhang + self.p.guard_edge_buffer_mm
             viol_now = _field_violation(now_env, e0, self.board_w, self.board_h)
-            if max(_field_violation(p, e0, self.board_w, self.board_h) for p in polys) > viol_now + 0.5:
+            future_viol = max(_field_violation(p, e0, self.board_w, self.board_h) for p in polys)
+            # Never cross the buffered allowed edge; if already outside it, permit only clearly inward motion.
+            # (Proposed by GPT-Luna B09, reviewed by Opus.)
+            if (future_viol > 0.0) if viol_now <= 0.0 else (future_viol >= max(0.0, viol_now - 0.5)):
                 why = "board"
             elif self._conflict(rid, polys):
                 why = "reservation"
