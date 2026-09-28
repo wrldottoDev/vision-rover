@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import math
 import random
+from dataclasses import replace
 
 import numpy as np
 import pytest
@@ -216,6 +217,96 @@ def test_candidate_diversity():
     assert len(plans) >= 2, planner.last_failure
     pts = {(round(p.delivery_point[0], 0), round(p.delivery_point[1], 0)) for p in plans}
     assert len(pts) == len(plans), "expected distinct delivery points across returned plans"
+
+
+def test_single_cube_coverage_is_symmetric_under_corner_reflections():
+    """A coarse, generously timed sample has equivalent coverage at all reflected depots.
+
+    The point set is closed under both board reflections, so this catches asymmetric waypoint
+    axes and deadline-sensitive candidate ordering without asserting an exact global coverage.
+    """
+    values = (120.0, 300.0, 560.0, 740.0)
+    depots = ((50.0, 50.0), (810.0, 50.0), (810.0, 810.0))
+    coverage: list[float] = []
+    for dx, dy in depots:
+        found = 0
+        for x in values:
+            for y in values:
+                planner = PushPlanner()
+                if planner.plan(CubeEstimate("red", x, y), make_depot("red", dx, dy), [],
+                                BOARD, BOARD, max_plans=1, deadline_s=3.0):
+                    found += 1
+        coverage.append(found / (len(values) ** 2))
+    assert max(coverage) - min(coverage) <= 0.05, f"reflected coverage differs: {coverage}"
+
+
+def test_marker_free_three_leg_search_follows_marker_overlapping_two_leg_results():
+    """A marker-only 2-leg result must not suppress a marker-free 3-leg route.
+
+    The enlarged depot makes both tiers reachable.  The two other cubes block the direct
+    routes to the marker-free part of the depot, while the extra waypoint in the 3-leg phase
+    opens that route.  Limiting the same case to two legs proves that the shorter results really
+    are marker-overlapping rather than merely absent.
+    """
+    params = replace(DEFAULT_PARAMS, intermediate_grid_mm=180.0, n_alpha_buckets=3)
+    cfg2 = replace(C, planner=replace(C.planner, delivery_candidates=16, max_push_legs=2))
+    depot = DepotZone("red", 110.0, 110.0, 110.0)
+    cube = CubeEstimate("red", 680.0, 380.0)
+    others = [CubeEstimate("blue", 320.0, 400.0), CubeEstimate("green", 100.0, 740.0)]
+
+    two_leg = PushPlanner(cfg2, params).plan(cube, depot, others, BOARD, BOARD,
+                                              max_plans=5, deadline_s=1.0)
+    assert two_leg and all(len(plan.legs) == 2 for plan in two_leg)
+    assert all("corner-marker overlap risk" in plan.notes for plan in two_leg)
+
+    cfg3 = replace(cfg2, planner=replace(cfg2.planner, max_push_legs=3))
+    planner = PushPlanner(cfg3, params)
+    three_leg = planner.plan(cube, depot, others, BOARD, BOARD, max_plans=5, deadline_s=1.0)
+    assert any(len(plan.legs) == 3 and "corner-marker overlap risk" not in plan.notes
+               for plan in three_leg), planner.last_failure
+
+
+@pytest.mark.parametrize("overhang_allowance", [0.0, 20.0])
+def test_blocker_diagnostic_distinguishes_another_cube_from_unsolvable_geometry(overhang_allowance):
+    cfg = replace(C, board=replace(C.board, overhang_allowance_mm=overhang_allowance)).planning()
+    planner = PushPlanner(cfg)
+    cube = CubeEstimate("red", 200.0, 300.0)
+    depot = make_depot("red", 810.0, 810.0)
+    blocker = CubeEstimate("blue", 100.0, 100.0)
+
+    assert PushPlanner(cfg).plan(cube, depot, [], cfg.board.width, cfg.board.height,
+                                 max_plans=1, deadline_s=1.0)
+    assert not planner.plan(cube, depot, [blocker], cfg.board.width, cfg.board.height,
+                             max_plans=1, deadline_s=1.0)
+    assert planner.last_blockers == ["blue"]
+    assert "unsolvable" not in planner.last_failure.lower()
+
+
+def test_blocker_diagnostic_runs_when_first_leg_classifier_has_a_reason():
+    """The first-leg classifier is not allowed to suppress clutter diagnosis."""
+    cube = CubeEstimate("red", 160.0, 280.0, alpha=0.2)
+    depot = make_depot("red", 810.0, 810.0)
+    blocker = CubeEstimate("blue", 80.0, 80.0)
+    reason = classify_unsolvable(C, cube, depot, [], BOARD, BOARD)
+    assert reason is not None
+    assert PushPlanner(C).plan(cube, depot, [], BOARD, BOARD, max_plans=1, deadline_s=1.0)
+
+    planner = PushPlanner(C)
+    assert not planner.plan(cube, depot, [blocker], BOARD, BOARD, max_plans=1, deadline_s=1.0)
+    assert planner.last_blockers == ["blue"]
+    assert "unsolvable" not in planner.last_failure.lower()
+
+
+def test_blocker_probes_share_the_callers_deadline():
+    """Failed clutter diagnosis must not add one fresh probe budget per cube."""
+    import time
+    cube = CubeEstimate("red", 200.0, 300.0)
+    depot = make_depot("red", 810.0, 810.0)
+    others = [CubeEstimate("blue", 100.0, 100.0), CubeEstimate("green", 150.0, 150.0)]
+    planner = PushPlanner()
+    t0 = time.monotonic()
+    planner.plan(cube, depot, others, BOARD, BOARD, max_plans=1, deadline_s=0.05)
+    assert time.monotonic() - t0 < 0.15
 
 
 def test_deadline_is_respected():

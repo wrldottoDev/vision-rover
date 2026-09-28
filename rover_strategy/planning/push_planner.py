@@ -498,15 +498,37 @@ def _grid_axes(cfg: Config, params: PushParams, board_w: float, board_h: float) 
         short of the room a subsequent leg needs to even get lined up.
     A uniform pitch alone can straddle either band without ever landing inside it."""
     lo_margin = cfg.margins.board + cfg.cube.half_diag + 5.0
-    xs = np.arange(lo_margin, board_w - lo_margin, params.intermediate_grid_mm)
-    ys = np.arange(lo_margin, board_h - lo_margin, params.intermediate_grid_mm)
+    # Mirror the usual lower-edge samples about the board centre.  ``arange(lo, hi, pitch)``
+    # by itself makes the uppermost sample depend on the interval remainder, so reflecting the
+    # field produces a different waypoint set (and, under a deadline, a different search).  This
+    # retains the useful historical pitch offsets while making the set closed under reflection.
+    def symmetric_axis(board_dim: float) -> list[float]:
+        lo, hi = lo_margin, board_dim - lo_margin
+        lower = list(np.arange(lo, hi, params.intermediate_grid_mm))
+        values = lower + [board_dim - v for v in lower]
+        return [float(v) for v in values]
+
+    xs = symmetric_axis(board_w)
+    ys = symmetric_axis(board_h)
     half_width, m = cfg.rover.outer_half_width, cfg.margins.board
     stage = cfg.prepush_distance + cfg.rover.chassis_half_length
     extra = [m + half_width + _EPS, board_w - m - half_width - _EPS, m + stage + _EPS, board_w - m - stage - _EPS]
     extra_y = [m + half_width + _EPS, board_h - m - half_width - _EPS, m + stage + _EPS, board_h - m - stage - _EPS]
     xs = list(xs) + extra
     ys = list(ys) + extra_y
-    return [float(x) for x in xs], [float(y) for y in ys]
+    # Preserve the exact reflection pairing after adding precision anchors and remove any
+    # accidental duplicate produced when an anchor lies on the coarse grid.
+    def unique_in_order(values: Sequence[float]) -> list[float]:
+        out: list[float] = []
+        seen: set[float] = set()
+        for value in values:
+            key = round(float(value), 9)
+            if key not in seen:
+                seen.add(key)
+                out.append(key)
+        return out
+
+    return unique_in_order(xs), unique_in_order(ys)
 
 
 def _intermediate_grid(xs: Sequence[float], ys: Sequence[float]) -> list[tuple[float, float]]:
@@ -572,8 +594,8 @@ def _leg_attempt(cfg: Config, fp: Footprint, start_xy: tuple[float, float], ente
         leg_risk = (params.grid_align_confidence * _capture_risk(cfg, near90)
                     + (1.0 - params.grid_align_confidence) * _capture_risk(cfg, math.pi / 4.0))
 
-    ok, _why = leg_feasible(cfg, fp, start_xy, entering_alpha, heading, length, other_cubes, board_w, board_h, slack,
-                            final_leg)
+    ok, _ = leg_feasible(cfg, fp, start_xy, entering_alpha, heading, length, other_cubes, board_w, board_h, slack,
+                         final_leg)
     if not ok:
         return None
     pre = prepush_pose(cfg, start_xy, heading)
@@ -594,27 +616,82 @@ class PushPlanner:
         self.params = params or DEFAULT_PARAMS
         self.fp = Footprint(cfg.rover)
         self.last_failure = ""
+        self.last_blockers: list[str] = []
+        self._diagnosing_blockers = False
+
+    def _diagnose_blockers(self, cube: CubeEstimate, depot: DepotZone,
+                           other_cubes: Sequence[CubeEstimate], board_w: float, board_h: float,
+                           deadline_at: float) -> list[str]:
+        """Find cubes whose removal restores a plan, without weakening the safety model.
+
+        A first-leg classifier can mistake an occupied pre-push pose for a cube wedged at a
+        board edge.  Probe each removal after the normal search failed, even when the
+        obstacle-free classifier reports a first-leg reason: that classifier does not prove
+        multi-leg impossibility.  ``deadline_at`` is shared with the caller so diagnostics
+        cannot extend the planning budget.
+        """
+        if not other_cubes:
+            return []
+        blockers: list[str] = []
+        for obstacle in other_cubes:
+            if deadline_at - time.monotonic() <= 0.0:
+                break
+            remaining = [c for c in other_cubes if c.color != obstacle.color]
+            probe = PushPlanner(self.cfg, self.params)
+            probe._diagnosing_blockers = True
+            if probe.plan(cube, depot, remaining, board_w, board_h, max_plans=1,
+                          deadline_s=0.0, _deadline_at=deadline_at):
+                blockers.append(obstacle.color)
+        return sorted(set(blockers))
 
     def plan(self, cube: CubeEstimate, depot: DepotZone, other_cubes: Sequence[CubeEstimate],
-             board_w: float, board_h: float, max_plans: int = 5, deadline_s: float = 0.3) -> list[PushPlan]:
+              board_w: float, board_h: float, max_plans: int = 5, deadline_s: float = 0.3,
+              _deadline_at: float | None = None) -> list[PushPlan]:
         cfg, p, fp = self.cfg, self.params, self.fp
         t0 = time.monotonic()
+        deadline_at = _deadline_at if _deadline_at is not None else t0 + max(0.0, deadline_s)
         self.last_failure = ""
+        self.last_blockers = []
         others = [c for c in other_cubes if c.color != cube.color]
 
         def order_key(D: tuple[float, float], a: float) -> float:
             scored = _delivery_point_risk(cfg, p, depot, D, a, board_w, board_h)
             return 1.0 if scored is None else scored[0]
 
-        d_points = sorted({D for D, _a in _delivery_candidates(cfg, p, depot, board_w, board_h)},
-                           key=lambda D: order_key(D, wrap_to_pm45(math.atan2(D[1] - cube.y, D[0] - cube.x))))
+        def reflection_invariant_key(point: tuple[float, float], origin: tuple[float, float]) -> tuple[float, ...]:
+            """Order a waypoint by quantities unchanged by x/y reflection of the whole scene.
+
+            Signed world coordinates make deadline-limited searches visit different prefixes in
+            reflected layouts.  Distances and the products of each displacement with the
+            corresponding origin-to-depot displacement retain the same ordering under either
+            reflection, while still preferring waypoints that make progress towards the depot.
+            """
+            dx, dy = point[0] - origin[0], point[1] - origin[1]
+            tx, ty = depot.cx - origin[0], depot.cy - origin[1]
+            return (round(math.hypot(dx, dy), 7),
+                    round(math.hypot(point[0] - depot.cx, point[1] - depot.cy), 7),
+                    round(dx * tx, 7), round(dy * ty, 7),
+                    round(abs(dx), 7), round(abs(dy), 7))
+
+        # Adjacent orientation buckets can describe the same point with tiny floating-point
+        # differences.  Canonicalising them keeps reflected searches identical and avoids
+        # spending deadline budget on duplicate endpoints.
+        start = (cube.x, cube.y)
+        d_by_key = {(round(D[0], 7), round(D[1], 7)): D
+                    for D, _a in _delivery_candidates(cfg, p, depot, board_w, board_h)}
+        d_points = sorted(d_by_key.values(), key=lambda D: (
+            order_key(D, wrap_to_pm45(math.atan2(D[1] - cube.y, D[0] - cube.x))),
+            reflection_invariant_key(D, start)))
 
         def budget_left() -> float:
-            return deadline_s - (time.monotonic() - t0)
+            return deadline_at - time.monotonic()
 
         # results: (marker_tier, risk, cost_s, PushPlan). marker_tier 0 = no corner-marker overlap.
         results: list[tuple[int, float, float, PushPlan]] = []
-        start = (cube.x, cube.y)
+
+        def enough_results() -> bool:
+            """Permit phase short-circuiting without bypassing the hard marker tier."""
+            return len(results) >= max_plans and any(r[0] == 0 for r in results)
 
         def try_final(legs: list[PushLeg], prior_cost: float, prior_risks: list[float],
                       leg_start: tuple[float, float], entering_alpha: float | None, entering_std: float,
@@ -640,12 +717,17 @@ class PushPlanner:
             if budget_left() <= 0:
                 break
             try_final([], 0.0, [], start, cube.alpha, cube.alpha_std, D, "1-leg direct")
+            if enough_results():
+                break
 
-        # ---- 2-/3-leg (only if we still need more candidates and legs are allowed)
-        if len(results) < max_plans and budget_left() > 0 and cfg.planner.max_push_legs >= 2:
+        # ---- 2-leg. Complete this phase before considering any 3-leg route so the common
+        # shorter solution is found first, while retaining enough budget for completeness.
+        needs_more_results = len(results) < max_plans or not any(r[0] == 0 for r in results)
+        if needs_more_results and budget_left() > 0 and cfg.planner.max_push_legs >= 2:
             grid_xs, grid_ys = _grid_axes(cfg, p, board_w, board_h)
             grid = _intermediate_grid(grid_xs, grid_ys)
-            hop1_candidates = _hop_candidates(start, d_points, grid, grid_xs, grid_ys)
+            hop1_candidates = sorted(_hop_candidates(start, d_points, grid, grid_xs, grid_ys),
+                                     key=lambda I: reflection_invariant_key(I, start))
             hop1 = []
             for I1 in hop1_candidates:
                 if budget_left() <= 0:
@@ -661,11 +743,17 @@ class PushPlanner:
                     if budget_left() <= 0:
                         break
                     try_final([leg1], cost1, [risk1], I1, alpha1, p.post_push_alpha_std, D, "2-leg")
+                    if enough_results():
+                        break
+                if enough_results():
+                    break
 
-            # Only pay for the O(hop1 x hop2 x delivery) 3-leg search if 1-/2-leg genuinely didn't
-            # already give us enough plans -- this is the expensive phase and most cubes never need
-            # it, so gating it keeps the common case fast (typically well under 0.15s).
-            if len(results) < max_plans and cfg.planner.max_push_legs >= 3:
+            # A 3-leg route can be needed to avoid a corner marker even when a 2-leg route
+            # exists, and it can provide additional plans when the shorter phase is sparse.
+            # Search it whenever the result set is incomplete or still entirely in the marker
+            # overlap tier; the final tier filter below then keeps marker-free plans preferred.
+            needs_more_results = len(results) < max_plans or not any(r[0] == 0 for r in results)
+            if (needs_more_results and budget_left() > 0 and cfg.planner.max_push_legs >= 3):
                 # Cap how many first hops feed the 3-leg search: try the most promising (cheapest,
                 # safest) ones first: a 3rd leg is only ever needed for the few hop1's that a 2-leg
                 # couldn't already close out, and this bounds the O(hop1 x hop2 x delivery) blow-up.
@@ -675,7 +763,9 @@ class PushPlanner:
                         break
                     # Anchors relative to I1 (not just the original cube position) so a 3rd leg can
                     # still square up to a tight corner even when the 2-leg route only got partway.
-                    for I2 in _hop_candidates(I1, d_points, grid, grid_xs, grid_ys):
+                    second_hops = sorted(_hop_candidates(I1, d_points, grid, grid_xs, grid_ys),
+                                         key=lambda I: reflection_invariant_key(I, I1))
+                    for I2 in second_hops:
                         if budget_left() <= 0:
                             break
                         att_mid = _leg_attempt(cfg, fp, I1, alpha1, p.post_push_alpha_std, I2, others,
@@ -688,10 +778,28 @@ class PushPlanner:
                                 break
                             try_final([leg1, leg2], cost1 + cost2, [risk1, risk2], I2, alpha2,
                                        p.post_push_alpha_std, D, "3-leg")
+                            if enough_results():
+                                break
+                        if enough_results():
+                            break
+                    if enough_results():
+                        break
 
         if not results:
-            self.last_failure = classify_unsolvable(cfg, cube, depot, other_cubes, board_w, board_h) \
-                or "no feasible push plan found within the search deadline"
+            # Do not call a cube geometrically unsolvable merely because another undelivered
+            # cube occupies the only currently reachable corridor. Probe obstacle removal
+            # before falling back to the edge/field explanation.
+            no_obstacle_reason = classify_unsolvable(cfg, cube, depot, [], board_w, board_h)
+            if not self._diagnosing_blockers:
+                self.last_blockers = self._diagnose_blockers(cube, depot, others, board_w, board_h, deadline_at)
+            if self.last_blockers:
+                names = ", ".join(self.last_blockers)
+                self.last_failure = f"cube '{cube.color}' blocked by undelivered cube(s): {names}"
+            elif no_obstacle_reason is not None:
+                self.last_failure = classify_unsolvable(cfg, cube, depot, other_cubes, board_w, board_h) \
+                    or no_obstacle_reason
+            else:
+                self.last_failure = "no feasible push plan found within the search deadline"
             return []
 
         # Hard corner-marker preference (lead audit): if any candidate avoids the marker entirely,
