@@ -429,14 +429,18 @@ def test_fsm_verify_capture_rejects_cube_not_touching_front_plate():
     agent = RoverAgent(0, C)
     # Centre 40 mm ahead of plate means 10 mm air gap for a face-aligned cube.
     # At lateral 11, no rotated square at depth 40 fits: 11 + 40 > 46.75.
-    assert not agent._fits_channel(40, 11), "contact tolerance accepts impossible plate/channel geometry"
+    # Lead amendment: the 5 mm contact tolerance absorbs measured depth bias (flush cubes read 26-37 mm in closed
+    # loop, unknown marker offset); the geometric rule is still enforced beyond it.
+    assert not agent._fits_channel(45, 11), "contact tolerance accepts impossible plate/channel geometry"
 
 
 def verified_contact_fixture(grant):
     agent = RoverAgent(0, C)
     agent.state = S.VERIFY_CAPTURE
     agent.engaged = True
-    leg = SimpleNamespace(cube_end=(300, 100))
+    # Lead amendment: an engaged rover may change the push line by <= 15 deg (FsmParams.push_line_max_change_deg);
+    # the original 24 deg fixture now (correctly) aborts to RETREAT.  ~10 deg still tests the recommitted heading.
+    leg = SimpleNamespace(cube_end=(300, 39))
     agent.task = SimpleNamespace(color="red", leg=0, budget_used=0., t_start=0.,
                                  plan=SimpleNamespace(legs=[leg]))
     requested = []
@@ -461,7 +465,7 @@ def test_verify_capture_reserves_actual_new_push_heading():
     agent, ctx, headings = verified_contact_fixture(True)
     agent._s_verify_capture(1, estimate(0, 0, 0), None, ctx)
     assert agent.state == S.PUSH
-    actual_heading = math.atan2(100, 300-77)
+    actual_heading = math.atan2(39, 300-77)
     assert headings == pytest.approx([actual_heading]), (
         f"recommitted heading {headings}, but new push line is {math.degrees(actual_heading):.2f} deg")
 
