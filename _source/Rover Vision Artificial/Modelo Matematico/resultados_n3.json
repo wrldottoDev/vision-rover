@@ -1,0 +1,272 @@
+[
+ {
+  "id": "N3.1",
+  "titulo": "Mapa de factibilidad del punto de puesta",
+  "estado": "PASA",
+  "metricas": {
+   "inviable_green_disco_pct": 28.814861839687257,
+   "inviable_green_rect_pct": 25.894617260850683,
+   "inviable_blue_disco_pct": 28.814861839687257,
+   "inviable_blue_rect_pct": 25.894617260850683,
+   "inviable_red_disco_pct": 28.814861839687257,
+   "inviable_red_rect_pct": 25.894617260850683,
+   "dist_media_inviable_c": 39.63572341125908,
+   "dist_media_cancha_c": 29.764171670509082,
+   "region_del_lado_opuesto": true,
+   "banda_col_max_c": 43.0,
+   "banda_teorica_c": 6.4713203435596425,
+   "incoherencias_verificacion": 0
+  },
+  "notas": [
+   "HALLAZGO H-05: 25.9% de la cancha (modelo rectangulo) no admite empuje directo",
+   "el modelo enunciaba la region cualitativamente; cuantificada resulta mayoritariamente",
+   "relevante: el empuje multi-tramo es obligatorio, no opcional.",
+   "el disco envolvente sobreestima la region en 2.9 puntos porcentuales"
+  ],
+  "segundos": 0.191
+ },
+ {
+  "id": "N3.2",
+  "titulo": "Embudo de tolerancia por dos vias independientes",
+  "estado": "PASA",
+  "metricas": {
+   "err_entre_vias_mm": 3.552713678800501e-14,
+   "e_max_min_mm": 4.323593128807147,
+   "e_max_max_mm": 16.75,
+   "cota_teorica_mm": 4.323593128807147,
+   "cota_universal": true
+  },
+  "notas": [
+   "e_max in [4.32, 16.75] mm = [0.216, 0.838] celdas"
+  ],
+  "segundos": 0.055
+ },
+ {
+  "id": "N3.3",
+  "titulo": "Contencion del corredor de empuje con rotacion del cubo",
+  "estado": "PASA",
+  "metricas": {
+   "n_trayectos": 10000,
+   "holgura_peor_mm": 7.105427357601002e-14,
+   "violaciones": 0,
+   "radio_corredor_mm": 42.42640687119285
+  },
+  "notas": [
+   "incluye rotacion inducida de +-30 grados durante el empuje"
+  ],
+  "segundos": 6.364
+ },
+ {
+  "id": "N3.4",
+  "titulo": "Funcional GTG: correctitud y regla de decision avance/retroceso",
+  "estado": "PASA",
+  "metricas": {
+   "n": 100000,
+   "err_vs_minimo": 1.7763568394002505e-15,
+   "identidad_A": 1.1368683772161603e-13,
+   "identidad_B": 1.1368683772161603e-13,
+   "acierto_regla_protocolo": 0.75173,
+   "acierto_regla_A_mas_B": 1.0
+  },
+  "notas": [
+   "HALLAZGO H-04: la regla de decision correcta es A+B>180, no A>90.",
+   "  A = |delta(phi0,theta0)| (giro inicial), B = |delta(phi*,phi0)| (giro final).",
+   "  Sale de T+ - T- = 2(A+B-180)/omega usando |delta(phi0+180,x)| = 180-|delta(phi0,x)|.",
+   "  La regla A>90 solo mira el primer giro e ignora el segundo: acierta 75%."
+  ],
+  "segundos": 0.055
+ },
+ {
+  "id": "N3.5",
+  "titulo": "Umbral de cuerda del anillo de aproximacion",
+  "estado": "PASA",
+  "metricas": {
+   "umbral_teorico_grados": 92.59022833989178,
+   "umbral_medido_grados": 92.60000000000001,
+   "error_grados": 0.009771660108228275,
+   "rho_cont_mm": 89.42640687119285,
+   "rho_puesta_mm": 129.42640687119285
+  },
+  "notas": [
+   "atajos en linea recta admisibles hasta 92.6 grados alrededor del cubo"
+  ],
+  "segundos": 0.09
+ },
+ {
+  "id": "N3.6",
+  "titulo": "Costo de un quiebre expresado en distancia equivalente",
+  "estado": "PASA",
+  "metricas": {
+   "equiv_90_mm": 363.30252450353146,
+   "retirada_mas_arco_90_mm": 243.3025245035315,
+   "aporte_del_giro_mm": 119.99999999999997,
+   "giro_esperado_mm": 120.0
+  },
+  "notas": [
+   "el modelo contabilizaba solo retirada+arco = 243.3 mm y omitia la reorientacion.",
+   "el giro de 90 grados a 90 deg/s agrega 120.0 mm: total 363.3 mm equivalentes.",
+   "con las dimensiones reales del DXF el quiebre cuesta 363 mm (antes 399)."
+  ],
+  "segundos": 0.0
+ },
+ {
+  "id": "N3.7",
+  "titulo": "Conjunto alcanzable condicional bajo oclusion",
+  "estado": "PASA",
+  "metricas": {
+   "n": 10000,
+   "declarados_inalcanzables": 3672,
+   "falsos_negativos": 0,
+   "frac_inalcanzable": 0.3672
+  },
+  "notas": [
+   "un falso negativo seria planificar hacia un cubo que ya se movio: debe ser 0",
+   "en el 37% de las configuraciones el cubo esta PROBADAMENTE quieto pese a age_ms alto"
+  ],
+  "segundos": 0.106
+ },
+ {
+  "id": "N3.8",
+  "titulo": "Interferencia entre los corredores de los dos rovers",
+  "estado": "PASA",
+  "metricas": {
+   "n": 10000,
+   "acuerdo_formula_vs_muestreo": 0.9999,
+   "frac_pares_incompatibles": 0.457,
+   "separacion_minima_mm": 84.8528137423857
+  },
+  "notas": [
+   "dos tareas son compatibles si sus corredores distan mas de L*sqrt2 = 84.9 mm",
+   "con corredores aleatorios, el 46% de los pares interfiere: la coordinacion",
+   "no es opcional, es el caso mayoritario."
+  ],
+  "segundos": 1.678
+ },
+ {
+  "id": "N3.9",
+  "titulo": "Zona trampa: posiciones desde las que el cubo no puede despegarse de la pared",
+  "estado": "PASA",
+  "metricas": {
+   "trampa_anillo_pct": 6.460562822037256,
+   "trampa_con_pct": 5.033690051525961,
+   "trampa_minima_pct": 3.2368873034746994,
+   "banda_teorica_celdas": 2.9713203435596425,
+   "trampa_con_anillo_de_maniobra_pct": 6.460562822037256
+  },
+  "notas": [
+   "Con el anillo de maniobra que exigen las paletas (8.05 celdas) la zona",
+   "trampa sube de 5.0 % a 6.5 %, y la banda junto a la pared de 2.97 a 4.55",
+   "celdas. Los depositos estan a 2,5 celdas del borde: quedan DENTRO de esa",
+   "banda, y por eso el lazo cerrado ya no puede corregir el ultimo tramo del",
+   "empuje contra un deposito (ver N4.1 revisado).",
+   "HALLAZGO H-09: un cubo a menos de rho_puesta - borde = 2.97 celdas (59 mm)",
+   "de una pared no puede ser empujado para alejarse de ella: el rover no cabe",
+   "detras. El 5.0% de la cancha es zona trampa con la distancia de puesta,",
+   "la revierte. Regla estrategica: nunca empujar un cubo hacia una pared.",
+   "Los depositos estan a 2,5 celdas del borde, DENTRO de la zona trampa: eso es",
+   "correcto y deseado (el cubo debe quedarse ahi), pero implica que un cubo",
+   "empujado hacia el deposito equivocado queda perdido."
+  ],
+  "segundos": 0.366
+ },
+ {
+  "id": "N3.10",
+  "titulo": "Ventana angular admisible: cuando el angulo del cubo es obligatorio",
+  "estado": "PASA",
+  "metricas": {
+   "tabla": [
+    [
+     0.0,
+     34.7552302543959,
+     0.7723384500976866
+    ],
+    [
+     1.0,
+     28.83968851916455,
+     0.6408819670925455
+    ],
+    [
+     2.0,
+     24.54000544681726,
+     0.5453334543737169
+    ],
+    [
+     3.0,
+     20.971954900203233,
+     0.4660434422267385
+    ],
+    [
+     5.0,
+     15.020679144427323,
+     0.33379286987616275
+    ],
+    [
+     8.0,
+     7.70204684936274,
+     0.17115659665250535
+    ]
+   ],
+   "e_max_45_mm": 4.323593128807147,
+   "presupuesto_45_mm": -0.676406871192853,
+   "e_max_alineado_mm": 16.75,
+   "presupuesto_alineado_mm": 11.75,
+   "frac_Delta_con_presupuesto_positivo": 0.7723333333333333,
+   "banda_negativa_grados": [
+    34.76,
+    55.24
+   ]
+  },
+  "notas": [
+   "HALLAZGO H-11: con W_canal = 93.50 mm el presupuesto lateral es NEGATIVO",
+   "en la banda Delta in [34.8, 55.2] grados, el 23 % de las orientaciones.",
+   "En el peor caso (45 grados) vale -0.68 mm:",
+   "la sola incertidumbre de la vision (5 mm) supera la tolerancia (4.32 mm).",
+   "Conocer el angulo del cubo dejo de ser una mejora: es OBLIGATORIO.",
+   "Regla: el empuje debe apuntar a menos de ~21 grados de la normal a una cara."
+  ],
+  "segundos": 0.0
+ },
+ {
+  "id": "N3.11",
+  "titulo": "Corredor de entrada: el tramo en que el cubo ya esta contenido",
+  "estado": "PASA",
+  "metricas": {
+   "tramo_contenido_mm": 55.0,
+   "lambda_mm": 55.0,
+   "fraccion_cubierta": [
+    0.6481812160876687,
+    0.9166666666666666
+   ],
+   "frac_orientaciones_que_sobresalen": 1.0
+  },
+  "notas": [
+   "El rover avanza exactamente lambda = 55 mm con el cubo ya entre las",
+   "paletas antes de que la placa frontal lo toque, y el tramo NO depende de",
+   "la orientacion. Durante todo ese tramo |e| <= e_max debe cumplirse ya.",
+   "Como lambda = 55 < L = 60, el cubo SIEMPRE sobresale por delante de las",
+   "puntas: las paletas cubren entre el 65 % (a 45 grados) y el 92 % (alineado)",
+   "de su extension. La contencion es parcial, y es mas debil justo en la",
+   "orientacion de peor tolerancia."
+  ],
+  "segundos": 0.001
+ },
+ {
+  "id": "N3.12",
+  "titulo": "Radio envolvente con las paletas incluidas",
+  "estado": "PASA",
+  "metricas": {
+   "R_rov_modelo_mm": 68.4402111335142,
+   "R_rov_real_mm": 113.48595728106628,
+   "subestimacion_pct": 65.81766099417221
+  },
+  "notas": [
+   "HALLAZGO H-12: el modelo tomaba R_rov = 68.44 mm, del contorno del chasis.",
+   "Con las paletas medidas (lambda = 55 mm) el disco envolvente centrado",
+   "en el chasis mide 113.49 mm: una subestimacion del 66 %.",
+   "Es un error del lado PELIGROSO: el planificador creia pasar por huecos",
+   "por los que no pasa. No afecta al empuje (rho_cont no cambia, porque el",
+   "cubo entra en el canal hasta la placa) pero si a colision y a frontera."
+  ],
+  "segundos": 0.0
+ }
+]

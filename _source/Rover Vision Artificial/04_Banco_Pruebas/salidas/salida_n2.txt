@@ -1,0 +1,61 @@
+================================================================================================
+NIVEL N2 --- VISION EXTREMO A EXTREMO CONTRA VERDAD SINTETICA
+================================================================================================
+
+           escenario                           cenital  inclinada   residuo   conf
+           tres cubos de la configuracion         1.23       0.76    0.0169   True
+           cubos repartidos                       1.40       1.05    0.0151   True
+           rotaciones 0/22.5/45                   0.84       0.65    0.0159   True
+           rover EMPUJANDO                        1.40       4.88    0.1334   True
+           rover tapando MAS                     34.31      12.63    0.2440  False
+[  OK  ] N2.1    Reproduccion de la linea base oficial de posicion    repartidos_inclinada_mm=1.05495  empujando_inclinada_mm=4.88466  desvio_rel_cubos_repartidos=0.00471193  desvio_rel_rover_EMPUJANDO=0.000953941
+           · valores documentados: repartidos 1.05 mm, empujando 4.88 mm (camara inclinada)
+
+           modo              n    err_med    err_p95    err_max err_pos_max
+           cenital         180     0.4194     1.0000     1.5000     1.6046
+           inclinada       180     0.4333     1.0000     1.5000     1.4219
+
+           dependencia del error angular con theta (camara inclinada):
+             0.4  0.3  0.2  0.4  0.4  0.4  0.5  0.4  0.3  0.3  0.4  0.8  0.5  0.3  0.2  0.6  0.6  0.6   <- theta = 0.0 .. 42.5 paso 2.5
+             0.6  0.5  0.7  0.4  0.3  0.5  0.7  0.6  0.7  0.3  0.4  0.4  0.3  0.3  0.4  0.3  0.3  0.3   <- theta = 45.0 .. 87.5 paso 2.5
+[  OK  ] N2.2    Error de ANGULO del detector oficial (sin linea base cenital_theta_medio=0.419444  cenital_theta_p95=1  cenital_theta_max=1.5  inclinada_theta_medio=0.433333
+           · criterio propuesto: <= 5 grados (limite de la restriccion de interfaz RI2)
+
+           condicion                   n    pos_max   th_medio     th_max     conf
+           despejado                  18      0.901      0.389      1.000     1.00
+           rover empujando ~22%       18      8.589     10.917     19.000     1.00
+           rover tapando ~70%         18     43.890     21.944     43.500     0.28
+[  OK  ] N2.3    Error de angulo bajo oclusion por empuje             despejado_pos_max=0.900577  despejado_th_max=1  despejado_frac_confiable=1  rover_pos_max=43.8903
+           · en oclusion severa NO se exige acertar: se exige declararse no confiable
+
+           n=436 observaciones acumuladas de N2.1-N2.3
+           Spearman(residuo, err_posicion) = +0.4419
+           Spearman(residuo, err_angulo)   = +0.4580
+
+                              err>10mm   err<=10mm
+           marcado NO conf.         11           4
+           marcado confiable         0         421   <- 0 falsos negativos
+
+           Mismo criterio aplicado al ANGULO (umbral 5 grados, RI2):
+                              err>5deg   err<=5deg
+           marcado NO conf.         15           0
+           marcado confiable        20         401   <- 20 falsos negativos (57%)
+[  OK  ] N2.4    Poder discriminante del criterio de confiabilidad    angulo_falsos_negativos=20  angulo_malos_totales=35  angulo_tasa_falsos_negativos=0.571429  n_observaciones=436
+           · HALLAZGO H-03: la bandera `confiable` NO protege el ANGULO.
+           · Su umbral (residuo <= 0.2 celdas) fue calibrado contra el error de
+           · POSICION. Bajo oclusion por empuje el angulo yerra hasta 19 grados
+           · y la deteccion se sigue declarando confiable en el 57% de los casos.
+           · Consecuencia: si algun dia se publica el angulo, NO se puede reutilizar
+           · esta bandera para filtrarlo; hace falta un umbral propio.
+           · falso negativo = deteccion con error > 10 mm que se declaro confiable
+
+           vertices de BASE recuperados del contorno: {1: 20, 0: 32, 2: 38} (de 90 escenas)
+           escenas con arista de base completa: 22/90 (24%)
+           B2 sobre arista real : err_medio=0.340  err_max=0.897 grados
+           ajuste oficial       : err_medio=0.456  err_max=1.500 grados
+[ INFO ] N2.5    Estimadores de la familia B sobre contornos reales   escenas=90  conteo_vertices_base={1: 20, 0: 32, 2: 38}  escenas_con_arista=22  tasa_extraccion=0.244444
+           · el eslabon debil de la familia B es la EXTRACCION de vertices, no la formula
+
+================================================================================================
+RESUMEN N2  ->  INFO: 1  PASA: 4
+================================================================================================

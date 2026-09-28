@@ -1,0 +1,335 @@
+[
+ {
+  "id": "N0.1",
+  "titulo": "Ortogonalidad y determinante de R(theta)",
+  "estado": "PASA",
+  "metricas": {
+   "n": 14401,
+   "err_ortog": 2.220446049250313e-16,
+   "err_det": 2.220446049250313e-16
+  },
+  "notas": [],
+  "segundos": 0.282
+ },
+ {
+  "id": "N0.2",
+  "titulo": "Homomorfismo R(a)R(b) = R(a+b)",
+  "estado": "PASA",
+  "metricas": {
+   "n_pares": 32400,
+   "err_max": 1.3877787807814457e-15
+  },
+  "notas": [],
+  "segundos": 0.384
+ },
+ {
+  "id": "N0.3",
+  "titulo": "R(t)u(f)=u(t+f) y recuperacion del argumento",
+  "estado": "PASA",
+  "metricas": {
+   "err_accion": 1.4155343563970746e-15,
+   "err_arg_grados": 5.684341886080802e-14
+  },
+  "notas": [],
+  "segundos": 0.025
+ },
+ {
+  "id": "N0.4",
+  "titulo": "Forma cerrada de R(90): (dx,dy) -> (dy,-dx)",
+  "estado": "PASA",
+  "metricas": {
+   "n": 100000,
+   "err_max": 6.394884621840902e-14
+  },
+  "notas": [],
+  "segundos": 0.018
+ },
+ {
+  "id": "N0.5",
+  "titulo": "Convencion fila-descendente (anclada al contrato)",
+  "estado": "PASA",
+  "metricas": {
+   "err_canonicos": 1.8369701987210297e-16,
+   "err_vs_contrato": 0.0
+  },
+  "notas": [
+   "u(90)=(0,-1): apunta a row decreciente = ARRIBA en pantalla. Correcto."
+  ],
+  "segundos": 0.0
+ },
+ {
+  "id": "N0.6",
+  "titulo": "Diferencia angular con signo: rango, congruencia, cruce",
+  "estado": "PASA",
+  "metricas": {
+   "n": 667440,
+   "err_congruencia": 0.0,
+   "alcanza_+180": false,
+   "alcanza_-180": true,
+   "rango_real": "[-180, 180)",
+   "rango_documentado": "(-180, 180]",
+   "antipodal_siempre_-180": true,
+   "err_casos_cruce": 4.546363285840016e-14
+  },
+  "notas": [
+   "delta(359.9, 0.1) = -0.2000  (la resta ingenua daria 359.8)",
+   "HALLAZGO H-02: el rango real de la forma cerrada es [-180, 180), NO (-180, 180].",
+   "El caso antipodal resuelve SIEMPRE a -180; +180 es inalcanzable.",
+   "El mismo texto incorrecto esta en el docstring oficial de",
+   "vision/detectors/rovers.py::diferencia_angular. Corregir ambos."
+  ],
+  "segundos": 0.366
+ },
+ {
+  "id": "N0.7",
+  "titulo": "rho_P: forma cerrada vs minimizacion explicita",
+  "estado": "PASA",
+  "metricas": {
+   "err_P90": 0.0,
+   "rango_P90": true,
+   "err_P360": 0.0,
+   "rango_P360": true
+  },
+  "notas": [],
+  "segundos": 1.374
+ },
+ {
+  "id": "N0.8",
+  "titulo": "Identidades del marco fila-descendente (apendice A)",
+  "estado": "PASA",
+  "metricas": {
+   "err_producto": 9.298117831235686e-16,
+   "err_cruz": 9.159339953157541e-16,
+   "err_suma": 8.881784197001252e-16,
+   "err_resta": 1.2212453270876722e-15,
+   "err_derivada": 5.845334216658671e-10
+  },
+  "notas": [],
+  "segundos": 0.021
+ },
+ {
+  "id": "N1.1",
+  "titulo": "Parametrizacion vertical: lado, diagonal, area, centroide",
+  "estado": "PASA",
+  "metricas": {
+   "err_lado_rel": 2.723747153747051e-15,
+   "err_diag_rel": 2.3684757858670005e-15,
+   "err_area_rel": 3.233758939637078e-14,
+   "err_centroide_rel": 1.8947806286936005e-15
+  },
+  "notas": [],
+  "segundos": 0.811
+ },
+ {
+  "id": "N1.2",
+  "titulo": "Recursion de 90 equivale a la forma trigonometrica",
+  "estado": "PASA",
+  "metricas": {
+   "err_max_mm": 1.1368683772161603e-13
+  },
+  "notas": [
+   "la recursion no evalua ninguna funcion trigonometrica"
+  ],
+  "segundos": 0.212
+ },
+ {
+  "id": "N1.3",
+  "titulo": "Invariancia bajo el grupo C4",
+  "estado": "PASA",
+  "metricas": {
+   "err_max_mm": 5.684341886080802e-14
+  },
+  "notas": [],
+  "segundos": 0.019
+ },
+ {
+  "id": "N1.4",
+  "titulo": "Aristas, puntos medios y normales exteriores",
+  "estado": "PASA",
+  "metricas": {
+   "err_lado": 9.237055564881302e-14,
+   "err_dist_medio": 7.815970093361102e-14,
+   "err_ortogonalidad": 2.960594732333751e-17,
+   "normales_exteriores": true
+  },
+  "notas": [],
+  "segundos": 0.145
+ },
+ {
+  "id": "N1.5",
+  "titulo": "Estimador B1: vertice de referencia + centro",
+  "estado": "PASA",
+  "metricas": {
+   "n_casos": 144000,
+   "err_max_grados": 1.4921397450962104e-13
+  },
+  "notas": [],
+  "segundos": 0.494
+ },
+ {
+  "id": "N1.6",
+  "titulo": "Estimador B2: arista, 4 aristas x 2 sentidos",
+  "estado": "PASA",
+  "metricas": {
+   "n_casos": 72000,
+   "err_max_grados": 1.4210854715202004e-13
+  },
+  "notas": [
+   "invariante al sentido de recorrido de la arista"
+  ],
+  "segundos": 0.399
+ },
+ {
+  "id": "N1.7",
+  "titulo": "Estimador B2: desambiguacion del signo de la normal",
+  "estado": "PASA",
+  "metricas": {
+   "err_testigo_centro": 6.355287432313019e-14,
+   "fallos_testigo_interior": 0,
+   "n_testigo_interior": 9000,
+   "fallos_testigo_realista": 0,
+   "n_testigo_realista": 19440,
+   "desplaz_centroide_max_mm": 19.60021376500817
+  },
+  "notas": [
+   "el centroide de la silueta NUNCA sale del cuadrado: sirve como testigo"
+  ],
+  "segundos": 1.104
+ },
+ {
+  "id": "N1.8",
+  "titulo": "Estimador B3: diagonal",
+  "estado": "PASA",
+  "metricas": {
+   "err_centro_mm": 2.842170943040401e-14,
+   "err_theta_grados": 8.526512829121202e-14
+  },
+  "notas": [],
+  "segundos": 0.576
+ },
+ {
+  "id": "N1.9",
+  "titulo": "Estimador B4 sin ruido: los 11 subconjuntos con |K|>=2",
+  "estado": "PASA",
+  "metricas": {
+   "n_subconjuntos": 11,
+   "err_centro_max_mm": 1.1718571004216928e-13,
+   "err_theta_max_grados": 1.1368683772161603e-13
+  },
+  "notas": [
+   "subconjuntos diagonales {0,2} y {1,3}: err_theta=5.68e-14, 1.14e-13 ; degeneraciones=0"
+  ],
+  "segundos": 0.597
+ },
+ {
+  "id": "N1.10",
+  "titulo": "Estimador B4 con ruido: insesgadez y cota de Cramer-Rao",
+  "estado": "PASA",
+  "metricas": {
+   "peor_desvio_relativo": 0.004298510836191594,
+   "peor_z_sesgo": 1.7423057774214807
+  },
+  "notas": [
+   "regimen validado: sigma <= 2 mm (el peor caso de vision con oclusion es 4.88 mm)"
+  ],
+  "segundos": 0.243
+ },
+ {
+  "id": "N1.11",
+  "titulo": "Estimador B4: ruptura ante un vertice atipico",
+  "estado": "ESPERADO",
+  "metricas": {
+   "err_theta_a_20mm": 6.734078751715295,
+   "err_theta_a_200mm": 41.663077361296004,
+   "err_centro_a_200mm": 50.00000000000003,
+   "desplaz_centro_teorico_200mm": 50.0
+  },
+  "notas": [
+   "B4 NO es robusto: el centro se corre d/n y el angulo se sesga sin cota util.",
+   "Mitigacion obligatoria: mediana de estimaciones por arista (B2) o RANSAC antes de B4."
+  ],
+  "segundos": 0.054
+ },
+ {
+  "id": "N1.12",
+  "titulo": "Funcion soporte: forma cerrada vs maximo explicito",
+  "estado": "PASA",
+  "metricas": {
+   "n_pares": 129600,
+   "err_max_mm": 6.394884621840902e-14
+  },
+  "notas": [],
+  "segundos": 0.032
+ },
+ {
+  "id": "N1.13",
+  "titulo": "Cota universal de anchura proyectada [L, L*sqrt2]",
+  "estado": "PASA",
+  "metricas": {
+   "w_min_mm": 60.0,
+   "w_max_mm": 84.8528137423857,
+   "cota_universal_1e6": true,
+   "err_extremo_0": 0.0,
+   "err_extremo_45": 1.4210854715202004e-14
+  },
+  "notas": [],
+  "segundos": 0.098
+ },
+ {
+  "id": "N1.14",
+  "titulo": "Lema de silueta: conteo de vertices del casco",
+  "estado": "PASA",
+  "metricas": {
+   "nadir_exterior": {
+    "6": 78660
+   },
+   "nadir_interior": {
+    "4": 60
+   },
+   "degeneraciones": {
+    "4": 40,
+    "5": 8
+   }
+  },
+  "notas": [
+   "nadir exterior -> {6: 78660} ; nadir interior -> {4: 60} ; sobre arista/vertice -> {4: 40, 5: 8}"
+  ],
+  "segundos": 8.997
+ },
+ {
+  "id": "N1.15",
+  "titulo": "Paralaje: la correccion es involucion exacta",
+  "estado": "PASA",
+  "metricas": {
+   "err_max_mm": 1.7053025658242404e-13
+  },
+  "notas": [],
+  "segundos": 0.034
+ },
+ {
+  "id": "N1.16",
+  "titulo": "Paralaje: invariancia de la direccion",
+  "estado": "PASA",
+  "metricas": {
+   "err_max_grados": 3.353761712787673e-12
+  },
+  "notas": [
+   "confirma que el rumbo del rover NO necesita correccion de paralaje"
+  ],
+  "segundos": 0.278
+ },
+ {
+  "id": "N1.17",
+  "titulo": "Centro proyectivo (diagonales) vs promedio de esquinas",
+  "estado": "PASA",
+  "metricas": {
+   "err_diagonales_max_mm": 3.5155713012650786e-13,
+   "err_promedio_100mm_12deg": 0.2911648556225488,
+   "err_promedio_60mm_12deg": 0.10481751669289371
+  },
+  "notas": [
+   "el sesgo del promedio crece con el lado del marcador, como predice el modelo"
+  ],
+  "segundos": 0.423
+ }
+]

@@ -1,0 +1,1663 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{mathptmx}
+\usepackage[scaled=0.9]{helvet}
+\usepackage[margin=2.3cm]{geometry}
+\usepackage{amsmath,amssymb,amsthm,mathtools}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,calc,positioning}
+\usepackage{pgfplots}
+\pgfplotsset{compat=1.16}
+\usepackage{microtype}
+\usepackage{enumitem}
+\usepackage{tcolorbox}
+\usepackage[hidelinks]{hyperref}
+\usepackage{fancyhdr}
+\usepackage{caption}
+\usepackage{colortbl}
+
+\tcbuselibrary{skins,breakable}
+\captionsetup{font=small,labelfont=bf}
+
+\renewcommand{\contentsname}{Índice}
+\renewcommand{\figurename}{Figura}
+\renewcommand{\tablename}{Cuadro}
+
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\footnotesize Informe de resultados · Vision Rover Challenge}
+\fancyhead[R]{\footnotesize\thepage}
+\renewcommand{\headrulewidth}{0.4pt}
+
+\definecolor{ok}{RGB}{232,244,234}
+\definecolor{mal}{RGB}{250,235,235}
+\definecolor{inf}{RGB}{240,240,246}
+
+\newcommand{\grados}{^{\circ}}
+\newcommand{\conv}{\operatorname{conv}}
+\newcommand{\PASA}{\cellcolor{ok}\textsf{\footnotesize PASA}}
+\newcommand{\FALLA}{\cellcolor{mal}\textsf{\footnotesize FALLA}}
+\newcommand{\INFO}{\cellcolor{inf}\textsf{\footnotesize INFO}}
+\newcommand{\ESPER}{\cellcolor{inf}\textsf{\footnotesize ESPERADO}}
+
+\newtcolorbox{hallazgo}[2]{
+  enhanced, breakable, colback=black!3, colframe=black!60,
+  boxrule=0.6pt, arc=1pt, left=6pt, right=6pt, top=4pt, bottom=4pt,
+  title={\bfseries #1\quad\normalfont #2},
+  colbacktitle=black!12, coltitle=black, fonttitle=\bfseries\small}
+
+\newcommand{\campo}[1]{\par\smallskip\noindent\textbf{#1}\quad\ignorespaces}
+
+\begin{document}
+
+\begin{titlepage}
+\centering
+\vspace*{2cm}
+{\Large\scshape Universidad Hispanoamericana}\\[0.2cm]
+{\large Ingeniería Mecatrónica}\\[2.2cm]
+
+\rule{\linewidth}{1.2pt}\\[0.4cm]
+{\LARGE\bfseries Informe de resultados de la\\[0.18cm]
+verificación y validación del modelo matemático}\\[0.4cm]
+\rule{\linewidth}{1.2pt}\\[0.8cm]
+
+{\large Ejecución completa del protocolo de pruebas:\\
+46 pruebas en cinco niveles, sin hardware físico}\\[2.2cm]
+
+\begin{tabular}{rl}
+\textbf{Autor} & Sebastián Vega Amores\\[0.12cm]
+\textbf{Documentos de referencia} & \textit{Modelo matemático} (v2) y \textit{Protocolo de pruebas}\\[0.12cm]
+\textbf{Fecha} & 2 de septiembre de 2026\\
+\end{tabular}
+
+\vfill
+\begin{tcolorbox}[colback=black!4,colframe=black!55,boxrule=0.6pt,arc=1pt,width=0.88\linewidth]
+\centering\small
+\textbf{Veredicto general:} el núcleo geométrico del modelo se sostiene sin excepciones.
+Se detectaron \textbf{diez hallazgos}, cuatro de ellos en el repositorio oficial.
+Ninguno invalida la conclusión central del modelo, pero el último ---las dimensiones
+reales del rover--- reduce su margen operativo en un $60\%$.
+\end{tcolorbox}
+\end{titlepage}
+
+\tableofcontents
+\newpage
+
+% =========================================================================
+\section{Resumen ejecutivo}
+
+\subsection{Veredicto}
+
+Se ejecutaron 50 pruebas distribuidas en cinco niveles, desde invariantes algebraicas
+hasta misiones completas en lazo cerrado. El resultado global:
+
+\begin{table}[htbp]
+\centering
+\small
+\caption{Resultado por nivel.}
+\begin{tabular}{llrrrl}
+\toprule
+Nivel & Alcance & Pruebas & Pasan & Otras & Observación \\
+\midrule
+N0 & Consistencia interna & 8 & 8 & --- & 1 defecto de documentación (H-02) \\
+N1 & Estimadores vs verdad analítica & 17 & 16 & 1 esperada & la refutación de N1.11 era el objetivo \\
+N2 & Visión extremo a extremo & 5 & 4 & 1 informativa & 1 hallazgo mayor (H-03) \\
+N3 & Capa de planificación & 12 & 12 & --- & 5 hallazgos (H-04, H-05, H-09, H-11, H-12) \\
+N4 & Lazo cerrado & 8 & 2 & 3 informativas & 6 hallazgos (H-06 a H-08, H-13 a H-15) \\
+\midrule
+\multicolumn{2}{l}{\textbf{Total}} & \textbf{50} & \textbf{42} & \textbf{5} & \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{tcolorbox}[colback=black!5,colframe=black!65,boxrule=0.7pt,arc=1pt]
+\textbf{Lectura de este cuadro.} N0 a N3 ---toda la matemática y toda la geometría de
+planificación--- pasa sin excepción. Las tres pruebas que fallan en N4 son misiones de
+lazo cerrado, y fallan \emph{después} de incorporar las dimensiones reales del rover
+medidas sobre el robot armado. La prueba N4.8 separa las dos causas posibles: con un cubo
+por vez el rover entrega $3{,}00$ de $3$; con los tres a la vez, $1{,}00$. \textbf{La
+geometría del empuje funciona; lo que falta es una capa de navegación que trate a los
+demás cubos como obstáculos.} Esa capa está desarrollada en el modelo y no estaba
+implementada en el planificador.
+\end{tcolorbox}
+
+\subsection{Las tres afirmaciones centrales del modelo, contrastadas}
+
+\begin{table}[htbp]
+\centering
+\small
+\caption{Contraste de las conclusiones del modelo matemático.}
+\begin{tabular}{p{5.6cm}p{4.1cm}p{4.6cm}}
+\toprule
+Afirmación & Evidencia & Veredicto \\
+\midrule
+\textbf{El ángulo del cubo se reconstruye en forma cerrada desde una arista o un
+vértice más el centro.} &
+N1.5, N1.6, N1.8, N1.9: error $\le 1{,}5\times10^{-13}$ grados en $216\,000$ casos. &
+\textbf{Confirmado.} Exacto en aritmética de doble precisión. \\
+\addlinespace
+\textbf{La planificación del empuje no requiere conocer el ángulo}, porque la anchura
+proyectada está acotada por $[L,\,L\sqrt2]$. &
+N1.12, N1.13, N3.2: cota verificada por dos vías independientes sobre $10^6$ pares
+aleatorios más malla de $0{,}1\grados$. N3.10 con el ancho útil real. &
+\textbf{Refutado en su consecuencia práctica.} La cota es exacta y el cubo siempre entra,
+pero con $W_u = 93{,}50$ el presupuesto de control es negativo en el $22{,}8\%$ de las
+orientaciones (H-11): conocer $\theta$ pasa a ser obligatorio. \\
+\addlinespace
+\textbf{El costo de una ruta lo domina el número de quiebres, no la distancia.} &
+N3.6: un quiebre de $90\grados$ equivale a $363\ \mathrm{mm}$ de empuje recto
+(el modelo contabiliza $243$, omitiendo el término de reorientación). &
+\textbf{Confirmado y reforzado.} El costo real es $49\%$ mayor que el que contabiliza la
+fórmula geométrica. \\
+\addlinespace
+\textbf{El presupuesto lateral de control es de $12{,}57\ \mathrm{mm}$}, derivado del
+embudo de tolerancia con el ancho supuesto. &
+N4.3: barrido de ruido en lazo cerrado; la ruptura ocurre a $14\ \mathrm{mm}$. N3.2 y
+N3.10 con el ancho real. &
+\textbf{Numéricamente confirmado, pero el parámetro era falso.} El acuerdo geometría--
+simulación fue del $10\%$; con $W_u = 93{,}50$ el presupuesto real va de $11{,}75$ a
+$-0{,}68\ \mathrm{mm}$ según la orientación. \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Los quince hallazgos}
+
+\begin{table}[htbp]
+\centering
+\small
+\caption{Hallazgos, ordenados por severidad.}
+\begin{tabular}{llp{7.4cm}l}
+\toprule
+Id & Dónde & Qué & Severidad \\
+\midrule
+H-11 & Modelo & Con el ancho útil real del canal ($93{,}50\ \mathrm{mm}$) el presupuesto
+de control lateral es \textbf{negativo} ($-0{,}68\ \mathrm{mm}$) en el $22{,}8\%$ de las
+orientaciones. \textbf{Confirmado por medición.} & \textbf{Crítica} \\
+H-12 & Modelo & Las paletas se prolongan $55\ \mathrm{mm}$ por delante y el envolvente
+no las contaba: $R_{\mathrm{rov}} = 113{,}5$, no $68{,}4$ ($+66\%$). El anillo de
+aproximación ya no libra el cubo. & \textbf{Crítica} \\
+H-14 & Planificador & Los otros cubos no eran obstáculos de navegación. Con paletas, el
+rover los \emph{engancha} y arrastra media cancha. & \textbf{Alta} \\
+H-15 & Planificador & No había retirada antes de girar: el rover barría con la paleta el
+cubo que acababa de entregar, sacándolo del depósito. & \textbf{Alta} \\
+H-13 & Planificador & Sin garantía de vivacidad: varias ramas devuelven «no te muevas» y
+el rover quedaba congelado el resto de la ronda. & Media \\
+H-03 & Sistema oficial & La bandera \texttt{confiable} no protege el ángulo:
+$57\%$ de falsos negativos con umbral de $5\grados$. & \textbf{Alta} \\
+H-01 & Simulador oficial & Radios de empuje y oclusión geométricamente incompatibles
+con el cuerpo del rover ($3{,}3\times$ menores). & \textbf{Alta} \\
+H-06 & Simulador oficial & Las poses iniciales declaradas hacen que los dos rovers se
+solapen físicamente. & \textbf{Alta} \\
+H-05 & Modelo & El $36{,}3\%$ de la cancha no admite empuje directo: el multi-tramo es
+obligatorio, no opcional. & Media \\
+H-07 & Alcance & La cesión por pares no basta: con dos rovers hay colisiones en el
+$5{,}5\%$ de las corridas (era el $100\%$ con las dimensiones supuestas). & Media \\
+H-04 & Modelo/protocolo & La regla de decisión avance/retroceso correcta es
+$A+B>180\grados$, no $A>90\grados$. & Media \\
+H-10 & Repositorio & Las dimensiones del rover estaban en el CAD de fabricación y son
+otras: canal $93{,}50$, huella $99{,}50\times94{,}00$, no $120\times140$. & \textbf{Alta} \\
+H-09 & Modelo & Zona de exclusión de borde: $2{,}8\%$ de la cancha (revisado desde
+$11{,}2\%$). El borde es un precipicio, no una pared. & Media \\
+H-08 & Contrato & El umbral de latencia de $500\ \mathrm{ms}$ es inerte: la misión ya
+falló a $200$. & Media \\
+H-02 & Ambos & El rango de $\delta$ es $[-180\grados,180\grados)$, no
+$(-180\grados,180\grados]$. & Baja \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% =========================================================================
+\section{Cómo se ejecutó}
+
+\subsection{Bancos de prueba}
+
+Se usaron tres fuentes de verdad, de independencia creciente:
+
+\begin{enumerate}[label=\arabic*.,leftmargin=2.4em,itemsep=3pt]
+\item \textbf{Verdad analítica} (N0, N1, N3): la configuración se genera por fórmula y
+      el estimador debe invertirla. Detecta errores de implementación y de álgebra.
+\item \textbf{Verdad sintética del repositorio oficial} (N2): el generador
+      \texttt{vision/sources/generador\_sintetico.py} renderiza imágenes proyectando un
+      cubo tridimensional, y el sistema oficial completo ---detección ArUco, homografía,
+      pose de cámara, ajuste de silueta--- las procesa. \emph{Ninguna línea del modelo
+      participa de la generación}, de modo que la coincidencia es informativa.
+\item \textbf{Simulador de dinámica propio} (N4): construido para este protocolo, con la
+      geometría de contacto corregida según el hallazgo H-01.
+\end{enumerate}
+
+\subsection{Reproducibilidad}
+
+Toda aleatoriedad usa semillas fijas (\texttt{20260902} para los niveles analíticos,
+índice de corrida para las misiones). Las corridas son deterministas y repetibles.
+El código del banco queda en cinco módulos: \texttt{modelo.py} (implementación de
+referencia), \texttt{arnes.py} (registro y criterios), \texttt{n0\_n1.py},
+\texttt{n2.py}, \texttt{n3.py}, \texttt{simulador.py}, \texttt{planificador.py} y
+\texttt{n4.py}.
+
+\subsection{Entorno}
+
+Python 3 con NumPy, SciPy y OpenCV 4.13 (con \texttt{aruco}). El sistema de visión
+oficial se ejecutó sin modificaciones: la prueba N2.1 reproduce su línea base publicada
+dentro del $0{,}5\%$, lo que confirma que el banco está correctamente montado antes de
+usarlo para medir magnitudes nuevas.
+
+% =========================================================================
+\section{Resultados por nivel}
+
+\subsection{N0 --- Consistencia interna}
+
+Ocho pruebas, todas superadas. Los errores máximos están en el orden del épsilon de
+máquina, lo que confirma que las convenciones del marco fila-descendente están
+correctamente implementadas.
+
+\begin{table}[htbp]
+\centering
+\small
+\caption{Nivel N0. Errores máximos sobre los barridos completos.}
+\begin{tabular}{llrl}
+\toprule
+Id & Prueba & Casos & Error máximo \\
+\midrule
+N0.1 & Ortogonalidad y determinante de $\mathbf R(\theta)$ & $14\,401$ & $2{,}2\times10^{-16}$ \\
+N0.2 & Homomorfismo $\mathbf R(\alpha)\mathbf R(\beta)=\mathbf R(\alpha+\beta)$ & $32\,400$ & $1{,}4\times10^{-15}$ \\
+N0.3 & Acción sobre versores y recuperación del argumento & $129\,600$ & $5{,}7\times10^{-14}$ grados \\
+N0.4 & Forma cerrada de $\mathbf R(90\grados)$ & $100\,000$ & $6{,}4\times10^{-14}$ \\
+N0.5 & Convención fila-descendente (anclada al contrato) & $720$ & $0$ (exacto) \\
+N0.6 & Diferencia angular con signo & $667\,440$ & $0$ \\
+N0.7 & $\rho_P$ contra minimización explícita & $\sim10^{6}$ & $0$ \\
+N0.8 & Identidades del apéndice A & $129\,600$ & $1{,}2\times10^{-15}$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+N0.5 merece una nota: se verificó $\mathbf u(\theta)$ contra la fórmula que aparece en
+la \emph{sección 4 del contrato oficial} (\texttt{dcol} $=\cos\theta$,
+\texttt{drow} $=-\sin\theta$), no contra el modelo. La coincidencia es exacta, bit a
+bit. La convención está bien anclada.
+
+\subsection{N1 --- Estimadores contra verdad analítica}
+
+Diecisiete pruebas: dieciséis superadas y una refutación deliberada.
+
+\begin{table}[htbp]
+\centering
+\small
+\caption{Nivel N1. Resultados principales.}
+\begin{tabular}{llp{7.0cm}l}
+\toprule
+Id & Prueba & Resultado & Veredicto \\
+\midrule
+N1.1 & Propiedades métricas del cuadrado & lado, diagonal, área y centroide correctos a $3\times10^{-14}$ relativo & \PASA \\
+N1.2 & Recursión de $90\grados$ & idéntica a la forma trigonométrica ($1{,}1\times10^{-13}$ mm) & \PASA \\
+N1.3 & Invariancia $C_4$ & $5{,}7\times10^{-14}$ mm & \PASA \\
+N1.4 & Aristas, medios y normales & normales exteriores correctas en los $2\,880$ casos & \PASA \\
+N1.5 & B1 (vértice + centro) & $1{,}5\times10^{-13}$ grados en $144\,000$ casos & \PASA \\
+N1.6 & B2 (arista) & $1{,}4\times10^{-13}$ grados; invariante al sentido de recorrido & \PASA \\
+N1.7 & B2, signo de la normal & $9\,000$ testigos interiores y $19\,440$ realistas: ningún fallo & \PASA \\
+N1.8 & B3 (diagonal) & $8{,}5\times10^{-14}$ grados & \PASA \\
+N1.9 & B4 sin ruido, 11 subconjuntos & $1{,}1\times10^{-13}$; los diagonales no degeneran & \PASA \\
+N1.10 & B4, cota de Cramér--Rao & desvío $\le 0{,}43\%$ de la predicción & \PASA \\
+N1.11 & B4 ante vértice atípico & se rompe, como se esperaba & \ESPER \\
+N1.12 & Función soporte & forma cerrada $=$ máximo explícito a $6{,}4\times10^{-14}$ & \PASA \\
+N1.13 & Cota $[L, L\sqrt2]$ & $10^6$ pares aleatorios, cero contraejemplos & \PASA \\
+N1.14 & Lema de silueta & $78\,660$ casos con nadir exterior: todos con 6 vértices & \PASA \\
+N1.15 & Paralaje, involución & $1{,}7\times10^{-13}$ mm & \PASA \\
+N1.16 & Paralaje, invariancia de dirección & $3{,}4\times10^{-12}$ grados & \PASA \\
+N1.17 & Centro proyectivo vs promedio & diagonales exactas; sesgo del promedio caracterizado & \PASA \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsubsection{N1.10 --- La cota de Cramér--Rao se cumple y se conoce su límite}
+
+El barrido en $\sigma$ confirma la fórmula $\sigma_{\hat\theta}=\sigma/(\varrho_{\rm ef}\sqrt n)$
+y además delimita su régimen de validez.
+
+\begin{table}[htbp]
+\centering
+\small
+\caption{N1.10. Monte Carlo con $50\,000$ realizaciones por celda,
+$L=60\ \mathrm{mm}$, $\theta=31\grados$.}
+\begin{tabular}{rrrrrr}
+\toprule
+$n$ & $\sigma$ [mm] & sesgo [$\grados$] & $\sigma_{\hat\theta}$ empírico & predicho & razón \\
+\midrule
+2 & $0{,}25$ & $+0{,}0001$ & $0{,}3377$ & $0{,}3376$ & $1{,}0001$ \\
+2 & $1{,}00$ & $+0{,}0047$ & $1{,}3467$ & $1{,}3505$ & $0{,}9972$ \\
+2 & $4{,}00$ & $-0{,}0094$ & $5{,}4481$ & $5{,}4019$ & $1{,}0086$ \\
+3 & $1{,}00$ & $-0{,}0014$ & $0{,}8292$ & $0{,}8270$ & $1{,}0026$ \\
+4 & $0{,}25$ & $-0{,}0006$ & $0{,}1693$ & $0{,}1688$ & $1{,}0028$ \\
+4 & $1{,}00$ & $-0{,}0004$ & $0{,}6752$ & $0{,}6752$ & $0{,}9999$ \\
+4 & $2{,}00$ & $-0{,}0105$ & $1{,}3530$ & $1{,}3505$ & $1{,}0019$ \\
+4 & $4{,}00$ & $-0{,}0356$ & $2{,}7189$ & $2{,}7009$ & $1{,}0067$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+El estimador es insesgado y eficiente hasta $\sigma = 2\ \mathrm{mm}$ con desvío inferior
+al $0{,}5\%$. A $\sigma = 4\ \mathrm{mm}$ aparece un sesgo pequeño pero estadísticamente
+detectable ($z = 2{,}9$ con $n=4$), lo que importa porque el peor error medido del
+sistema de visión bajo oclusión es $4{,}88\ \mathrm{mm}$: se está justo en el borde del
+régimen donde la aproximación de primer orden empieza a ceder.
+
+\subsubsection{N1.11 --- La refutación buscada}
+
+Esta prueba se diseñó para reprobar, y reprobó. Contaminando un vértice con un
+desplazamiento $d$:
+
+\begin{table}[htbp]
+\centering
+\small
+\caption{N1.11. Sensibilidad de B4 a un vértice atípico ($n=4$).}
+\begin{tabular}{rrrr}
+\toprule
+$d$ [mm] & error de $\hat\theta$ [$\grados$] & error de $\hat{\mathbf c}$ [mm] & pendiente [$\grados$/mm] \\
+\midrule
+$5$ & $1{,}69$ & $1{,}25$ & $0{,}338$ \\
+$20$ & $6{,}73$ & $5{,}00$ & $0{,}336$ \\
+$80$ & $28{,}12$ & $20{,}00$ & $0{,}362$ \\
+$120$ & $44{,}99$ & $30{,}00$ & $0{,}422$ \\
+$200$ & $41{,}66$ & $50{,}00$ & --- \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+El error del centro es exactamente $d/n$, como corresponde a una media aritmética: el
+estimador de mínimos cuadrados \textbf{no tiene punto de ruptura}. El error angular
+parece saturarse a $200\ \mathrm{mm}$, pero eso es un artefacto de la métrica: $\rho_{90}$
+no puede superar $45\grados$. El error real sigue creciendo sin cota.
+
+\begin{tcolorbox}[colback=black!3,colframe=black!50,boxrule=0.5pt,arc=1pt]
+\textbf{Consecuencia de diseño.} B4 (Procrustes) es el estimador \emph{óptimo} cuando
+todos los vértices son del cubo, y el \emph{peor} cuando uno no lo es. Como un extractor
+de vértices real producirá falsos positivos ---una esquina del rover, un reflejo---,
+B4 no puede usarse solo. La cascada correcta es: estimar $\theta$ por B2 sobre
+\emph{cada} arista candidata, tomar la mediana circular, descartar los vértices
+incompatibles con esa mediana, y recién entonces refinar con B4 sobre los
+supervivientes.
+\end{tcolorbox}
+
+\subsubsection{N1.14 --- Las degeneraciones del lema de silueta}
+
+El lema afirma «genéricamente seis vértices». La prueba buscó activamente las
+configuraciones no genéricas:
+
+\begin{table}[htbp]
+\centering
+\small
+\caption{N1.14. Conteo de vértices de la envolvente convexa.}
+\begin{tabular}{lrl}
+\toprule
+Posición del nadir & Casos & Vértices del casco \\
+\midrule
+Exterior a la base (malla de $2\times2$ m, tres alturas de cámara) & $78\,660$ & 6 en el $100\%$ \\
+Interior a la base & $60$ & 4 en el $100\%$ \\
+Sobre un vértice de la base & $24$ & 4 \\
+Sobre el punto medio de una arista & $24$ & 4 en 16 casos, 5 en 8 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+El lema queda confirmado y sus degeneraciones caracterizadas: el nadir sobre un vértice
+produce $B \subset T$ (casco de cuatro vértices, porque escalar un cuadrado alrededor de
+uno de sus propios vértices lo contiene), y sobre el punto medio de una arista produce
+cinco. Ambas son configuraciones de medida nula que no se dan en la práctica, pero ahora
+están documentadas en lugar de supuestas.
+
+\subsection{N2 --- Visión extremo a extremo}
+
+Este es el nivel que aportó el hallazgo más importante.
+
+\subsubsection{N2.1 --- La línea base se reproduce}
+
+\begin{table}[htbp]
+\centering
+\small
+\caption{N2.1. Error de posición del detector oficial, en milímetros.}
+\begin{tabular}{lrrrl}
+\toprule
+Escenario & cenital & inclinada & residuo & documentado \\
+\midrule
+Los tres cubos de la configuración & $1{,}23$ & $0{,}76$ & $0{,}017$ & --- \\
+Cubos repartidos por la cancha & $1{,}40$ & $\mathbf{1{,}05}$ & $0{,}015$ & $1{,}05$ \\
+Rotaciones de $0\grados$, $22{,}5\grados$, $45\grados$ & $0{,}84$ & $0{,}65$ & $0{,}016$ & --- \\
+Un rover empujando el cubo & $1{,}40$ & $\mathbf{4{,}88}$ & $0{,}133$ & $4{,}88$ \\
+Un rover tapando más del cubo & $34{,}31$ & $12{,}63$ & $0{,}244$ & no confiable \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Desvío respecto de los valores publicados: $0{,}47\%$ y $0{,}10\%$. El banco está bien
+montado.
+
+\subsubsection{N2.2 --- Primera caracterización del error angular}
+
+Ninguna herramienta del repositorio mide esta magnitud. Barriendo
+$\theta\in[0\grados,90\grados)$ con paso $2{,}5\grados$ sobre cinco zonas de la cancha
+y los dos modos de cámara ($360$ observaciones):
+
+\begin{table}[htbp]
+\centering
+\small
+\caption{N2.2. Error angular del detector oficial, cubo despejado.}
+\begin{tabular}{lrrrr}
+\toprule
+Modo de cámara & $n$ & medio [$\grados$] & p95 [$\grados$] & máximo [$\grados$] \\
+\midrule
+Cenital & $180$ & $0{,}419$ & $1{,}00$ & $1{,}50$ \\
+Inclinada $8\grados$ & $180$ & $0{,}433$ & $1{,}00$ & $1{,}50$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+El error no depende de $\theta$ ni de la zona, y está cuantizado en múltiplos de
+$0{,}25\grados$, que es exactamente la resolución final del descenso por coordenadas
+($4\grados/2^4$). Es decir: \textbf{el error angular con el cubo despejado está
+dominado por la discretización del optimizador, no por el ruido de la imagen.} Bajar
+ese error es cuestión de agregar una ronda de refinamiento, no de mejorar la cámara.
+
+\subsubsection{N2.3 --- Y su degradación bajo oclusión}
+
+\begin{table}[htbp]
+\centering
+\small
+\caption{N2.3. Degradación con oclusión (cámara inclinada, $18$ ángulos por condición).}
+\begin{tabular}{lrrrr}
+\toprule
+Condición & pos.\ máx.\ [mm] & áng.\ medio [$\grados$] & áng.\ máx.\ [$\grados$] & frac.\ confiable \\
+\midrule
+Despejado & $0{,}90$ & $0{,}39$ & $1{,}00$ & $1{,}00$ \\
+Rover empujando ($\approx22\%$) & $8{,}59$ & $\mathbf{10{,}92}$ & $\mathbf{19{,}00}$ & $\mathbf{1{,}00}$ \\
+Rover tapando ($\approx70\%$) & $43{,}89$ & $21{,}94$ & $43{,}50$ & $0{,}28$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Con un rover empujando, la posición se degrada $9{,}5\times$ (de $0{,}90$ a
+$8{,}59\ \mathrm{mm}$) pero el ángulo se degrada $\mathbf{28\times}$ (de $0{,}39$ a
+$10{,}92\grados$ de media). Y \textbf{el $100\%$ de esas detecciones se declara
+confiable}. De aquí sale el hallazgo H-03.
+
+\subsubsection{N2.5 --- El eslabón débil de la familia analítica}
+
+Extrayendo vértices de la base del contorno real por el criterio de homotecia
+($\mathbf q = \mathbf N + \kappa(\mathbf p - \mathbf N)$), sobre $90$ escenas:
+
+\begin{table}[htbp]
+\centering
+\small
+\caption{N2.5. Extracción de vértices de la base y precisión resultante.}
+\begin{tabular}{lr}
+\toprule
+Escenas con 0 vértices de base recuperados & $32$ ($36\%$) \\
+Escenas con 1 vértice & $20$ ($22\%$) \\
+Escenas con 2 vértices & $38$ ($42\%$) \\
+Escenas con una \emph{arista} completa de base & $22$ ($24\%$) \\
+\midrule
+B2 sobre arista real: error medio / máximo & $0{,}340\grados$ / $0{,}897\grados$ \\
+Ajuste oficial de silueta: error medio / máximo & $0{,}456\grados$ / $1{,}500\grados$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+El resultado es de doble filo y ambos filos importan. Por un lado, \textbf{cuando la
+arista se recupera, B2 es más preciso que el ajuste oficial} ($0{,}34\grados$ contra
+$0{,}46$ de media, y $0{,}90$ contra $1{,}50$ de máximo): la fórmula cerrada no tiene
+error de discretización. Por otro, la arista solo se recupera en el $24\%$ de las
+escenas. \emph{El eslabón débil de la familia analítica no es la matemática sino la
+extracción de vértices}, que es justamente el paso que el modelo no desarrolla. La
+conclusión práctica es que B2 sirve como \textbf{refinador} de una pose ya estimada por
+el ajuste de silueta, no como estimador primario.
+
+\subsection{N3 --- Capa de planificación}
+
+Ocho pruebas, todas superadas, con dos hallazgos.
+
+\begin{table}[htbp]
+\centering
+\small
+\caption{Nivel N3. Resultados.}
+\begin{tabular}{llp{7.4cm}l}
+\toprule
+Id & Prueba & Resultado & Veredicto \\
+\midrule
+N3.1 & Mapa de factibilidad & $36{,}3\%$ de la cancha sin empuje directo (H-05) & \PASA \\
+N3.2 & Embudo por dos vías & coinciden a $3{,}6\times10^{-14}$ mm; cota universal & \PASA \\
+N3.3 & Contención del corredor & $10^4$ trayectos con rotación $\pm30\grados$: cero violaciones & \PASA \\
+N3.4 & Funcional \textsc{gtg} & mínimo correcto; regla de decisión corregida (H-04) & \PASA \\
+N3.5 & Umbral de cuerda del anillo & teórico $84{,}95\grados$, medido $85{,}0\grados$ & \PASA \\
+N3.6 & Costo de un quiebre & $399\ \mathrm{mm}$ equivalentes para $90\grados$ & \PASA \\
+N3.7 & Conjunto alcanzable & cero falsos negativos en $10^4$ configuraciones & \PASA \\
+N3.8 & Interferencia entre corredores & $46\%$ de los pares interfiere & \PASA \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsubsection{N3.6 --- El costo de doblar, cuantificado}
+
+\begin{table}[htbp]
+\centering
+\small
+\caption{N3.6. Costo de un quiebre expresado en distancia rectilínea equivalente,
+con $v=120\ \mathrm{mm/s}$ y $\omega=90\grados/\mathrm{s}$.}
+\begin{tabular}{rrrr}
+\toprule
+Quiebre & arco [mm] & giro [s] & equivalente [mm] \\
+\midrule
+$15\grados$ & $39{,}9$ & $0{,}17$ & $99{,}9$ \\
+$45\grados$ & $119{,}7$ & $0{,}50$ & $219{,}7$ \\
+$90\grados$ & $239{,}4$ & $1{,}00$ & $\mathbf{399{,}4}$ \\
+$180\grados$ & $478{,}9$ & $2{,}00$ & $758{,}9$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+El modelo afirmaba $\approx279\ \mathrm{mm}$ para un quiebre de $90\grados$. Ese número
+es correcto para el término retirada $+$ arco ($279{,}4\ \mathrm{mm}$ medidos, desvío
+$0{,}01\%$), pero \textbf{omite el tiempo de reorientación}. Incluyéndolo, el costo real
+es $399\ \mathrm{mm}$: un $43\%$ más. La regla de diseño «minimizar quiebres antes que
+longitud» sale reforzada, no debilitada.
+
+\subsubsection{N3.8 --- La coordinación no es opcional}
+
+Con corredores de empuje aleatorios, el $\mathbf{46\%}$ de los pares interfiere ---sus
+corredores distan menos de $L\sqrt2 = 84{,}85\ \mathrm{mm}$---. La condición analítica
+coincide con el muestreo denso en el $99{,}99\%$ de $10^4$ casos. Es decir: si se asignan
+tareas a los dos rovers sin mirar la geometría, casi la mitad de las asignaciones son
+incompatibles. Esto anticipa el hallazgo H-07.
+
+\subsection{N4 --- Lazo cerrado}
+
+Se construyó el simulador de dinámica especificado en la sección 5.1 del protocolo:
+cinemática de uniciclo, contacto entre cuerpos rígidos por el teorema del eje separador,
+empuje direccional restringido a la cara delantera, rotación inducida por centro
+instantáneo cuasiestático, oclusión por área tapada y telemetría v1 con ruido, pérdidas
+y latencia configurables.
+
+Las pruebas se corrieron en dos configuraciones: \textbf{un rover}, que aísla la capa
+geométrica del modelo (su alcance declarado), y \textbf{dos rovers}, que expone la falta
+de la capa de coordinación multi-agente (explícitamente fuera de alcance).
+
+\subsubsection{Una corrección al propio simulador}
+
+Durante la puesta a punto se detectó que el primer modelo de oclusión del simulador
+---superposición de la \emph{huella} del rover con la \emph{base} del cubo--- no puede
+producir oclusión durante un empuje: vistos desde arriba, los dos cuerpos se tocan pero
+no se solapan. Es exactamente el mismo defecto que se le señala al simulador oficial en
+el hallazgo H-01.
+
+La corrección consistió en comparar \textbf{siluetas} en lugar de huellas. La silueta de
+un cuerpo de altura $h$ es $\conv(B \cup T)$ con $T = \mathbf N + \kappa(h)(B-\mathbf N)$,
+donde $\mathbf N$ es el nadir. Como el rover mide $90\ \mathrm{mm}$ y el cubo
+$60\ \mathrm{mm}$, la silueta del rover se proyecta sobre la del cubo, que es el
+mecanismo físico real de la oclusión. Con el modelo corregido la oclusión aparece donde
+debe:
+
+\begin{table}[htbp]
+\centering
+\small
+\caption{Oclusión medida en el simulador corregido, con el rover en pose de contacto.}
+\begin{tabular}{lrrr}
+\toprule
+Posición del cubo & dist.\ al nadir [celdas] & $d=5{,}00$ c & $d=5{,}62$ c \\
+\midrule
+$(21{,}5;\,21{,}5)$ --- bajo la cámara & $0$ & $3{,}2\%$ & $0{,}0\%$ \\
+$(26;\,10)$ & $12{,}4$ & $5{,}5\%$ & $0{,}0\%$ \\
+$(10;\,10)$ & $16{,}3$ & $9{,}5\%$ & $0{,}2\%$ \\
+$(34;\,9)$ & $17{,}7$ & $13{,}8\%$ & $0{,}7\%$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+La estructura es la correcta: bajo la cámara casi no hay oclusión, y crece al alejarse
+del nadir. La magnitud queda por debajo del $22\%$ que reporta el sistema oficial,
+porque el generador oficial dibuja además las caras laterales del rover; el mecanismo,
+sin embargo, es el mismo. \textbf{Se deja registrado que el autor cometió el mismo error
+que estaba auditando}, porque es precisamente la clase de defecto que solo aparece
+cuando se construye el escenario y se lo mira, y no cuando se razona sobre él.
+
+\subsubsection{Resultados}
+
+\begin{table}[htbp]
+\centering
+\small
+\caption{N4.1 y N4.2. Misión nominal. Las dos configuraciones usan el mismo
+planificador; la única diferencia es el número de rovers.}
+\begin{tabular}{llrrrrr}
+\toprule
+Prueba & Config & entregas & $t_{50}$ [s] & $t_{90}$ [s] & colisiones & corridas limpias \\
+\midrule
+N4.1 (sin ruido) & 1 rover  & $3/3$ & $33{,}4$ & --- & $0$ & --- \\
+N4.1 (sin ruido) & 2 rovers & $3/3$ & $21{,}7$ & --- & $\mathbf{0}$ & --- \\
+\addlinespace
+N4.2 (200 semillas) & 1 rover  & $\mathbf{98{,}5\%}$ & $43{,}6$ & $48{,}4$ & $0{,}0$ & $\mathbf{100\%}$ \\
+N4.2 (200 semillas) & 2 rovers & $96{,}5\%$ & $28{,}4$ & $32{,}6$ & $0{,}2$ & $\mathbf{94{,}5\%}$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Dos rovers son un $35\%$ más rápidos en la mediana ($28{,}4$ contra $43{,}6\ \mathrm{s}$)
+y colisionan en el $5{,}5\%$ de las corridas. Ese es el intercambio que cuantifica el
+hallazgo H-07: el paralelismo paga, y la falta de coordinación cuesta --- aunque
+\textbf{mucho menos de lo que costaba} con las dimensiones supuestas, donde colisionaban
+en el $100\%$ de las corridas. Es el efecto colateral benigno del rover real: al ser más
+chico, dos cuerpos se estorban mucho menos en la misma cancha.
+
+\subsubsection{N4.3 --- El presupuesto de error del modelo, falsado}
+
+Esta es la prueba que convierte el modelo en algo refutable. El modelo predice un
+presupuesto lateral de control de $e^{\max}_{\mathrm{control}} = 12{,}57\ \mathrm{mm}$.
+
+\begin{table}[htbp]
+\centering
+\small
+\caption{N4.3. Tasa de entrega completa contra ruido posicional, un rover,
+40 semillas por punto.}
+\begin{tabular}{rrrrrrrrrr}
+\toprule
+$\sigma$ [mm] & $0$ & $1$ & $2$ & $4$ & $6$ & $8$ & $10$ & $\mathbf{14}$ & $20$ \\
+\midrule
+tasa $3/3$ & $1{,}00$ & $1{,}00$ & $0{,}93$ & $0{,}93$ & $0{,}83$ & $0{,}65$ & $0{,}63$ &
+$\mathbf{0{,}33}$ & $0{,}08$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+El punto de ruptura (tasa $<0{,}5$) está en $\sigma = 14\ \mathrm{mm}$, es decir
+$\mathbf{1{,}1\times}$ \textbf{el presupuesto predicho}. Para una predicción derivada de
+geometría pura ---la anchura proyectada de un cuadrado contra el ancho de las paletas,
+menos la incertidumbre de la visión--- contrastada contra una simulación dinámica
+completa con contacto entre cuerpos, ruido, oclusión y realimentación, un acuerdo del
+$10\%$ es un resultado fuerte. \textbf{El embudo de tolerancia del modelo predice
+correctamente dónde se rompe el sistema.}
+
+\subsubsection{N4.4 --- La latencia}
+
+\begin{table}[htbp]
+\centering
+\small
+\caption{N4.4. Tasa de entrega completa contra latencia, un rover. Las dos columnas
+corresponden a dos presupuestos de tiempo de misión distintos.}
+\begin{tabular}{rrrrrrrr}
+\toprule
+Latencia [ms] & $0$ & $50$ & $100$ & $200$ & $400$ & $800$ & $1600$ \\
+\midrule
+tasa con $t_{\max}=180\ \mathrm{s}$ & $0{,}97$ & $0{,}97$ & $1{,}00$ & \multicolumn{4}{c}{---} \\
+tasa con $t_{\max}=60\ \mathrm{s}$ & $1{,}00$ & $1{,}00$ & $\mathbf{0{,}17}$ & $0{,}00$ & $0{,}00$ & $0{,}00$ & $0{,}00$ \\
+frenadas por la regla RI4 & $0$ & $0$ & $0$ & $0$ & $0$ & $14\,220$ & $14\,028$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Las dos filas dicen cosas distintas y complementarias. Con tiempo de sobra, el
+planificador \emph{tolera} $100\ \mathrm{ms}$ de latencia: entrega igual. Con un
+presupuesto de $60\ \mathrm{s}$, a $100\ \mathrm{ms}$ solo el $17\%$ de las corridas
+llega a tiempo. Es decir: \textbf{la latencia no rompe la corrección, rompe el tiempo}.
+Y a partir de $200\ \mathrm{ms}$ falla en ambos sentidos.
+
+Las columnas con y sin la regla de corte RI4 son idénticas en todo el rango, porque la
+regla solo dispara por encima de $500\ \mathrm{ms}$, donde ya no queda nada que salvar.
+De ahí el hallazgo H-08.
+
+\subsubsection{N4.5 --- Escenarios adversarios}
+
+\begin{table}[htbp]
+\centering
+\small
+\caption{N4.5. Seis configuraciones construidas para romper hipótesis nombradas.}
+\begin{tabular}{lrrrrl}
+\toprule
+Escenario & entregas & $t$ [s] & colis. & salidas & desenlace \\
+\midrule
+(a) cubo en la esquina opuesta & $0/1$ & $120$ & $0$ & $0$ & abandonado: zona trampa \\
+(b) cubo pegado a la pared & $1/1$ & $17{,}7$ & $0$ & $0$ & entregado \\
+(c) dos cubos adyacentes & $2/2$ & $28{,}5$ & $0$ & $0$ & entregados \\
+(d) cubo ajeno en el corredor & $1/2$ & $120$ & $0$ & $0$ & el ajeno cayó en la trampa \\
+(e) corredores cruzados & $1/2$ & $120$ & $5$ & $0$ & colisiones (H-07) \\
+(f) cubo sobre depósito ajeno & $0/1$ & $120$ & $0$ & $0$ & abandonado: zona trampa \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Ningún rover salió de la cancha en ningún escenario.} Los casos (a) y (f) no son
+fallas del planificador: colocan el cubo en la zona trampa del hallazgo H-09, donde no
+existe secuencia de empujes que lo saque. Lo que la prueba verifica es que el
+planificador \emph{lo detecta y abandona}, en vez de gastar la ronda empujando contra
+una pared. El caso (d) es más interesante: el cubo azul, que empezó en el corredor,
+terminó empujado contra la pared por el tránsito del verde y quedó atrapado. Es la
+demostración dinámica de por qué la regla «nunca empujar hacia una pared» tiene que
+aplicarse también a los cubos que uno \emph{no} está transportando.
+
+\subsubsection{N4.6 --- Oclusión durante el transporte}
+
+Con el modelo de siluetas corregido, sobre $121$ muestras de la fase de empuje:
+
+\begin{table}[htbp]
+\centering
+\small
+\caption{N4.6. Oclusión y error lateral durante un empuje completo.}
+\begin{tabular}{lrr}
+\toprule
+Magnitud & media & máximo \\
+\midrule
+Fracción de la silueta del cubo tapada & $6{,}2\%$ & $26{,}6\%$ \\
+\texttt{age\_ms} del cubo & $0$ & $\mathbf{0}$ \\
+Error lateral $|e|$ [mm] & $5{,}07$ & $13{,}37$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+El resultado corrige una expectativa del modelo. La oclusión durante un empuje normal
+llega al $26{,}6\%$ ---coherente con el $22\%$ que reporta el sistema oficial--- pero
+\textbf{no alcanza para perder la detección}: \texttt{age\_ms} se mantiene en cero
+durante todo el transporte. La consecuencia es importante y va en contra de la
+intuición:
+
+\begin{tcolorbox}[colback=black!3,colframe=black!50,boxrule=0.5pt,arc=1pt]
+\textbf{Durante el empuje el dato no llega viejo: llega fresco y equivocado.} El riesgo
+no es la obsolescencia sino la \emph{degradación silenciosa de la exactitud}: posición
+con $4{,}88\ \mathrm{mm}$ de error en vez de $1{,}05$, y ángulo con hasta $19\grados$ en
+vez de $1{,}5$ ---todo con \texttt{age\_ms} $=0$ y la bandera \texttt{confiable} en
+verdadero (H-03). Una lógica que solo vigile \texttt{age\_ms} no ve nada de esto.
+\end{tcolorbox}
+
+El error lateral máximo, $13{,}37\ \mathrm{mm}$, supera levemente el presupuesto de
+$12{,}57$ y aun así la entrega se completó: el presupuesto del modelo es conservador,
+porque supone simultáneamente el peor ángulo del cubo y el peor error de visión.
+
+\newpage
+% =========================================================================
+\section{Los hallazgos en detalle}
+
+\begin{hallazgo}{H-11}{El presupuesto de control lateral es negativo en el $22{,}8\%$ de las orientaciones}
+\campo{Dónde} Consecuencia del ancho útil real del canal, establecido sobre
+\texttt{CENFOBOT\_PIEZAS\_SEPARADAS.dxf}. Verificado en N3.2 y en la prueba nueva N3.10.
+\campo{Qué} El chasis mide $93{,}50\ \mathrm{mm}$ de cuerpo, con lengüetas pasantes de
+$3{,}00\ \mathrm{mm}$ por lado. Como las lengüetas atraviesan los paneles laterales, las
+\emph{caras interiores} de los paneles coinciden con los bordes del cuerpo del chasis, y
+el ancho útil del canal es
+\[
+  W_u = 93{,}50\ \mathrm{mm}, \qquad W_{\mathrm{ext}} = 99{,}50\ \mathrm{mm}.
+\]
+Con $L = 60$, la tolerancia lateral cae a
+$e_{\max} \in [\,4{,}32;\ 16{,}75\,]\ \mathrm{mm}$. Descontando la incertidumbre de la
+visión ($\sigma_{\mathrm{vis}} = 5\ \mathrm{mm}$), el presupuesto para el error de
+control en el peor caso es
+\[
+  4{,}32 - 5{,}00 \;=\; \mathbf{-0{,}68\ \mathrm{mm}} .
+\]
+Es negativo: la sola incertidumbre de la medición excede la tolerancia disponible, aun
+con un controlador perfecto. La banda afectada es
+$\Delta \in (34{,}76\grados;\ 55{,}24\grados) \bmod 90\grados$, el $22{,}8\%$ de las
+orientaciones posibles.
+\campo{Impacto} \textbf{Crítico, y cambia el alcance del proyecto.} En las dos revisiones
+anteriores conocer el ángulo del cubo era, primero, una mejora de eficiencia, y luego una
+palanca de robustez. Con el ancho real \textbf{es condición de funcionamiento}: existen
+orientaciones para las cuales el empuje ciego no tiene margen alguno, y ocurren en casi
+una de cada cuatro presentaciones aleatorias del cubo.
+\campo{Acción} Regla de apuntado, verificada en N3.10:
+\begin{enumerate}[label=(\alph*),leftmargin=2em,itemsep=1pt,topsep=2pt]
+\item \textbf{Apuntar el empuje a menos de $21\grados$ de la normal a una cara del cubo}
+      (ventana con $3\ \mathrm{mm}$ de margen de control). Como las caras se repiten cada
+      $90\grados$, hay cuatro direcciones admisibles y la restricción cuesta poco en
+      planificación.
+\item \textbf{Implementar la estimación de $\theta$}, que el detector oficial calcula
+      internamente pero el contrato v1 no publica. Los estimadores cerrados de la sección
+      de resultados N1 la resuelven con una arista o con un vértice más el centro.
+\item \textbf{Reevaluar la alineación durante el transporte.} El cubo gira libremente
+      dentro del canal ($W_u > L\sqrt2$), así que puede entrar alineado y salir de la
+      ventana sin que nada lo impida.
+\item \textbf{Verificar con calibre} que el robot armado mide $99{,}50\ \mathrm{mm}$
+      punta a punta. Es la única comprobación pendiente, y confirma o refuta todo lo
+      anterior en un minuto.
+\end{enumerate}
+\end{hallazgo}
+
+\begin{hallazgo}{H-12}{El envolvente del rover estaba subestimado un 66\,\%}
+\campo{Dónde} Consecuencia de medir el alcance de las paletas sobre el rover armado
+($\lambda = 55\ \mathrm{mm}$, medición M6). Verificado en N3.12.
+\campo{Qué} El modelo tomaba $R_{\mathrm{rov}} = \tfrac12\sqrt{W_{\mathrm{ext}}^2+\Lambda^2}
+= 68{,}44\ \mathrm{mm}$, del contorno del chasis. Pero las paletas se prolongan
+$55\ \mathrm{mm}$ por delante de la placa frontal, de modo que la huella \textbf{no es
+simétrica} respecto del centro del chasis: llega $47\ \mathrm{mm}$ hacia atrás y
+$102\ \mathrm{mm}$ hacia adelante. El disco envolvente mide
+\[
+  R_{\mathrm{rov}} = \sqrt{102^2 + 49{,}75^2} = \mathbf{113{,}49\ \mathrm{mm}},
+\]
+un $66\%$ más. La medición del largo total lo confirma por otra vía: $94 + 55 = 149$
+contra los $150\ \mathrm{mm}$ medidos.
+\campo{Impacto} \textbf{Crítico, y del lado peligroso.} El planificador creía pasar por
+huecos por los que no pasa. Tres consecuencias:
+\begin{enumerate}[label=(\alph*),leftmargin=2em,itemsep=1pt,topsep=2pt]
+\item \textbf{El anillo de aproximación deja de librar el cubo.} Rodear el cubo a
+      $\varrho_{\mathrm{puesta}} = 129{,}43\ \mathrm{mm}$ lo \emph{barre} con las paletas.
+      Girar detrás de él exige $\varrho_{\mathrm{man}} = 155{,}9\ \mathrm{mm}$.
+\item \textbf{La zona trampa crece.} De $5{,}03\%$ a $6{,}46\%$ de la cancha, y la banda
+      junto al borde de $2{,}97$ a $4{,}55$ celdas. Los depósitos están a $2{,}5$ celdas
+      del borde: quedan \emph{dentro} de esa banda.
+\item \textbf{La distancia de contacto no cambia.} Como $\lambda > L\sqrt2/2$, el cubo
+      entra en el canal hasta tocar la placa frontal, que es la que empuja.
+\end{enumerate}
+\campo{Acción} Acceso en dos tramos: al anillo de maniobra primero, y desde ahí en línea
+recta por el propio eje de empuje. Implementado y verificado en N4.
+\end{hallazgo}
+
+\begin{hallazgo}{H-14}{Los demás cubos no eran obstáculos de navegación}
+\campo{Dónde} Planificador. Descubierto al incorporar la forma de U al simulador.
+\campo{Qué} El planificador navegaba ignorando los cubos que no eran su objetivo. Con la
+huella rectangular anterior eso era casi inocuo: pasar cerca de un cubo lo rozaba. Con las
+paletas, la punta \textbf{engancha} el cubo y lo arrastra: en una corrida nominal un cubo
+fue desplazado $36$ celdas respecto de su depósito.
+\campo{Impacto} \textbf{Alto.} El despeje lateral que el rover necesita al pasar junto a
+un cubo ajeno es $W_{\mathrm{ext}}/2 + L\sqrt2/2 = 92{,}2\ \mathrm{mm} = 4{,}6$ celdas, y
+el corredor de empuje también debe respetarlo. Ninguna de las dos condiciones se
+verificaba.
+\campo{Acción} Tratar los demás cubos como obstáculos, tanto en la navegación como en el
+corredor de empuje. El modelo ya tenía la maquinaria ---inflado de Minkowski, grafo de
+visibilidad, condición de corredores disjuntos de N3.8--- pero el planificador nunca la
+usó porque con la huella supuesta no hacía falta.
+\end{hallazgo}
+
+\begin{hallazgo}{H-15}{El rover deshacía su propio trabajo al girar}
+\campo{Dónde} Planificador. Cuantificado en N4.8.
+\campo{Qué} Al terminar un empuje, el rover soltaba el objetivo y giraba en el lugar para
+ir al siguiente. Con las paletas por delante, ese giro \textbf{barre el cubo que acaba de
+dejar} y lo saca del depósito. En la misión nominal con tres cubos se contabilizan
+$\mathbf{4{,}00}$ des-entregas por corrida: cubos que llegaron a estar dentro de la
+tolerancia de entrega y después salieron.
+\campo{Impacto} \textbf{Alto.} No es que el rover falle en entregar: es que deshace
+entregas ya conseguidas. Es el peor tipo de falla porque el trabajo perdido ya estaba
+pagado.
+\campo{Acción} Retirada recta antes de girar. Para que las puntas queden libres del cubo
+hay que retroceder exactamente $\lambda = 55\ \mathrm{mm}$: el rover tiene que desandar el
+canal antes de darse vuelta. El costo ya estaba contemplado en el funcional GTG del modelo
+---el término de retirada--- pero el planificador nunca lo ejecutaba.
+\end{hallazgo}
+
+\begin{hallazgo}{H-13}{El planificador no tenía garantía de vivacidad}
+\campo{Dónde} Planificador, varias ramas de la función de decisión.
+\campo{Qué} Varias ramas devuelven «no te muevas» ($v=0$, $\omega=0$). Si la condición que
+las dispara no cambia por sí sola, el rover queda inmóvil el resto de la ronda. Con la
+huella chica el caso no se alcanzaba. Al incorporar las paletas, la rama «sin pose de
+puesta válida, sin waypoint, y a menos de $3$ celdas del depósito» pasó a ser alcanzable:
+el rover se congelaba con dos cubos sin entregar y $200$ eventos de borde por corrida.
+\campo{Impacto} Medio, pero insidioso: un bloqueo silencioso no se distingue de un rover
+que está pensando.
+\campo{Acción} Vigilante por síntoma ---objetivo fijo y rover quieto más de $2{,}5$
+segundos--- que libera el objetivo. No repara la causa; garantiza que la misión siga
+avanzando. Bajó los eventos de borde de $200$ a $5$ por corrida.
+\end{hallazgo}
+
+\begin{hallazgo}{H-01}{El modelo de contacto del simulador oficial es geométricamente imposible}
+\campo{Dónde} \texttt{contrato/config\_simulador.json}.
+\campo{Qué} Declara \texttt{radio\_empuje\_celdas} $=1{,}5$ ($30\ \mathrm{mm}$) y
+\texttt{radio\_oclusion\_celdas} $=2{,}0$ ($40\ \mathrm{mm}$), medidos entre centros. La
+distancia real entre centros en el instante de contacto es
+\[
+  \varrho_{\mathrm{cont}} = \tfrac{L}{2}\big(|\cos\Delta|+|\sin\Delta|\big) + \tfrac{\Lambda}{2}
+  \in [\,100{,}0;\ 112{,}4\,]\ \mathrm{mm},
+\]
+es decir entre $3{,}3$ y $3{,}7$ veces el radio declarado. Con cuerpos de
+$120\times140\ \mathrm{mm}$ y cubos de $60\ \mathrm{mm}$, que el centro del rover llegue
+a $30\ \mathrm{mm}$ del centro del cubo exige que el rover haya atravesado el cubo.
+\campo{Impacto} Doble. \textbf{(a)} Un planificador calibrado contra el simulador
+aprende a acercarse demasiado y en la cancha embiste el cubo antes de llegar a su punto
+de puesta. \textbf{(b)} El simulador \emph{nunca ocluye un cubo durante un empuje
+legítimo} ($5{,}0 > 2{,}0$ celdas), que es justo el caso que el sistema real reporta como
+el más frecuente y que degrada la detección de $1{,}05$ a $4{,}88\ \mathrm{mm}$. La
+lógica de \texttt{age\_ms} queda sin ejercitar donde más importa.
+\campo{Acción} Elevar a la organización. Mientras tanto, no calibrar distancias de
+aproximación contra el simulador oficial; usar el simulador de N4.
+\end{hallazgo}
+
+\begin{hallazgo}{H-02}{El rango de la diferencia angular está mal documentado}
+\campo{Dónde} El modelo matemático y el docstring de
+\texttt{vision/detectors/rovers.py::diferencia\_angular}, que declaran
+$(-180\grados,\,180\grados]$.
+\campo{Qué} La forma cerrada
+$\delta(\alpha,\beta)=\big((\alpha-\beta+180\grados)\bmod 360\grados\big)-180\grados$
+tiene rango $[-180\grados,\,180\grados)$: $\delta=+180\grados$ exigiría que el módulo
+devolviera $360\grados$, imposible. Verificado sobre $2{,}16$ millones de evaluaciones:
+$-180\grados$ se alcanza, $+180\grados$ nunca.
+\campo{Impacto} Bajo, pero real. Una aserción $-180 < \delta \le 180$ falla exactamente
+en el caso antipodal, que es infrecuente y por eso aparece tarde. Operativamente, un
+giro de exactamente $180\grados$ se resuelve siempre hacia el mismo lado, de forma
+determinista.
+\campo{Acción} \textbf{Corregido en el modelo} (observación 2.5, nueva). Señalar el
+docstring a la organización.
+\end{hallazgo}
+
+\begin{hallazgo}{H-03}{La bandera \texttt{confiable} no protege el ángulo}
+\campo{Dónde} \texttt{vision/detectors/cubos.py}: el criterio
+$J_\beta \le \tau_J = 0{,}2$ celdas.
+\campo{Qué} El umbral fue calibrado contra el error de \emph{posición} y funciona muy
+bien para eso: sobre $436$ observaciones acumuladas, \textbf{cero falsos negativos} con
+el criterio «error de posición $>10\ \mathrm{mm}$». Aplicado al \emph{ángulo} con el
+umbral de $5\grados$ que impone la restricción de interfaz RI2, el mismo criterio da
+$\mathbf{20}$ \textbf{falsos negativos de} $\mathbf{35}$ casos malos: una tasa del
+$\mathbf{57\%}$.
+
+\medskip
+\centering
+\begin{tabular}{lrr}
+\toprule
+& error $>5\grados$ & error $\le5\grados$ \\
+\midrule
+marcado \textsc{no} confiable & $15$ & $0$ \\
+marcado confiable & $\mathbf{20}$ & $401$ \\
+\bottomrule
+\end{tabular}
+
+\raggedright
+\medskip
+La causa es la medida en N2.3: con un rover empujando ($\approx22\%$ de oclusión) la
+posición se degrada $9{,}5\times$ pero el ángulo se degrada $28\times$, y el residuo
+---que mide ajuste global de la silueta--- no distingue una cosa de la otra.
+\campo{Impacto} Alto \emph{si algún día se publica el ángulo}. Un consumidor que
+reutilice \texttt{confiable} para filtrar el ángulo aceptará errores de hasta
+$19\grados$ como buenos, cuatro veces el límite de RI2.
+\campo{Acción} Elevar a la organización: el ángulo necesita su propio umbral de
+confiabilidad, no puede compartir el de la posición. Confirma además, por otra vía, la
+decisión del modelo de planificar sin depender de $\theta$.
+\end{hallazgo}
+
+\begin{hallazgo}{H-04}{La regla de decisión avance/retroceso del protocolo es incorrecta}
+\campo{Dónde} Protocolo de pruebas, N3.4, que proponía «el retroceso gana si
+$|\delta(\varphi_0,\theta_0)| > 90\grados$».
+\campo{Qué} Esa regla acierta solo el $\mathbf{75\%}$ de las veces sobre $10^5$ ternas
+aleatorias, porque mira el primer giro e ignora el segundo. Usando la identidad
+verificada $|\delta(\varphi_0+180\grados, x)| = 180\grados - |\delta(\varphi_0,x)|$
+(error máximo $1{,}1\times10^{-13}$), la diferencia de costos es
+\[
+  T^{+} - T^{-} \;=\; \frac{2\,(A + B - 180\grados)}{\omega},
+  \qquad A = |\delta(\varphi_0,\theta_0)|,\quad B = |\delta(\varphi^\star,\varphi_0)|,
+\]
+de donde la regla exacta es $A+B>180\grados$. Acierta el $\mathbf{100{,}00\%}$.
+\campo{Impacto} Medio. La regla equivocada produce un cuarto de las maniobras con un
+giro de más. Se manifiesta como «el rover da vueltas al pedo», síntoma que suele
+atribuirse erróneamente al controlador de bajo nivel.
+\campo{Acción} \textbf{Implementada} en el planificador de N4. Conviene agregarla al
+modelo como corolario del teorema \textsc{gtg}.
+\end{hallazgo}
+
+\begin{hallazgo}{H-05}{El empuje multi-tramo es obligatorio, no opcional}
+\campo{Dónde} Modelo matemático, corolario de la zona de puesta inviable, que enunciaba
+la región de forma cualitativa.
+\campo{Qué} Cuantificada sobre una malla de $173\times173$ posiciones de cubo para cada
+depósito: el $\mathbf{36{,}3\%}$ de la cancha no admite empuje directo (modelo de
+rectángulo orientado). Con el disco envolvente, más conservador, sube a $39{,}96\%$: la
+diferencia de $3{,}7$ puntos es el precio de aproximar el rover por un disco.
+\campo{Impacto} Medio-alto. Más de un tercio de las posiciones posibles de un cubo exige
+la descomposición multi-tramo. Tratarla como una rama excepcional es un error de diseño;
+hay que implementarla y probarla como camino principal.
+\campo{Acción} Cuantificar en el modelo. Implementada en el planificador de N4.
+\end{hallazgo}
+
+\begin{hallazgo}{H-06}{Las poses iniciales oficiales hacen que los rovers se solapen}
+\campo{Dónde} \texttt{contrato/config\_simulador.json}: rovers en $(4;\,4)$ y $(4;\,8)$.
+\campo{Qué} Están a $4$ celdas $=80\ \mathrm{mm}$ entre centros, pero cada rover mide
+$120\ \mathrm{mm}$ de ancho. Se solapan $40\ \mathrm{mm}$. Las separaciones mínimas son:
+\[
+  \text{lado a lado } 120\ \mathrm{mm}\ (6{,}0\ \text{c}),\qquad
+  \text{en fila } 140\ \mathrm{mm}\ (7{,}0\ \text{c}),\qquad
+  \text{cualquier rumbo } 184{,}4\ \mathrm{mm}\ (9{,}22\ \text{c}).
+\]
+El simulador oficial no lo detecta porque no tiene modelo de cuerpo: sus rovers son
+puntos.
+\campo{Impacto} Alto el día del montaje. Si la zona de salida real obliga a esa
+separación, los dos robots no entran. Además, cualquier prueba que arranque desde esa
+configuración empieza con los cuerpos interpenetrados.
+\campo{Acción} Elevar a la organización y \textbf{medir físicamente la zona de salida}.
+En el banco de N4 se usan $7$ celdas de separación.
+\end{hallazgo}
+
+\begin{hallazgo}{H-07}{La cesión por pares no basta como coordinación}
+\campo{Dónde} Frontera del alcance del modelo, que excluyó explícitamente la
+coordinación multi-agente.
+\campo{Qué} N3.8 midió que el $\mathbf{46\%}$ de los pares de corredores de empuje
+aleatorios interfiere. N4.2 midió la consecuencia en dinámica: con dos rovers y la
+cesión por pares como única coordinación, la entrega se mantiene pero hay colisiones en
+el $\mathbf{5{,}5\%}$ de las corridas (con las dimensiones supuestas eran el $100\%$;
+el rover real, más chico, se estorba mucho menos).
+\campo{Impacto} Medio, y revisado a la baja. Las colisiones no impidieron la entrega en
+el simulador, pero en la cancha física una colisión puede desplazar un cubo, desalinear
+un marcador o penalizar. Con $0{,}2$ colisiones de media por corrida el problema pasó de
+sistemático a esporádico, pero no desapareció: la condición geométrica de N3.8 sigue
+diciendo que el $46\%$ de los pares de corredores interfiere, y lo que bajó es la
+probabilidad de que ese cruce se materialice, no la ausencia de coordinación.
+\campo{Acción} Implementar coordinación real: reserva espacio-temporal de corredores, o
+asignación que exija corredores disjuntos (la condición geométrica ya está verificada en
+N3.8, con acuerdo del $99{,}99\%$ contra muestreo denso).
+\end{hallazgo}
+
+\begin{hallazgo}{H-09}{La zona trampa: un cubo pegado a la pared es irrecuperable}
+\campo{Dónde} Consecuencia geométrica no prevista en el modelo, descubierta al
+investigar por qué fallaban los escenarios adversarios (a) y (f) de N4.5.
+\campo{Qué} Para empujar un cubo \emph{alejándolo} de una pared, el rover tiene que
+colocarse entre el cubo y esa pared. Necesita $\varrho_{\mathrm{puesta}} = 7{,}62$
+celdas, y el tablero físico solo ofrece $3{,}5$ celdas de borde muerto. Por lo tanto un
+cubo a menos de
+\[
+  \varrho_{\mathrm{puesta}} - 3{,}5 = 4{,}12\ \text{celdas} = 82\ \mathrm{mm}
+\]
+de una pared \textbf{no puede ser alejado de ella}. Barriendo toda la cancha, el
+$\mathbf{11{,}22\%}$ de las posiciones es zona trampa: ninguna dirección de empuje con
+punto de puesta válido incrementa la distancia a la pared. Con la distancia de contacto
+mínima (sin margen de seguridad) la zona baja solo a $9{,}53\%$: \emph{no es un problema
+de margen, es un problema de tamaño del rover}.
+\campo{Impacto} \textbf{Estratégico.} Un cubo empujado hacia una pared se pierde para el
+resto de la ronda. Y como los depósitos están a $2{,}5$ celdas del borde, es decir
+\emph{dentro} de la zona trampa, empujar un cubo hacia el depósito equivocado lo pierde
+de forma definitiva.
+\campo{Acción} Tres reglas para el planificador:
+\begin{enumerate}[label=(\alph*),leftmargin=2em,itemsep=1pt,topsep=2pt]
+\item \textbf{Nunca empujar un cubo hacia una pared} si existe alternativa; preferir
+      trayectorias que lo mantengan a más de $4{,}12$ celdas del borde.
+\item \textbf{Detectar la zona trampa y abandonar} el objetivo en lugar de gastar la
+      ronda. Implementado: en N4.5 el planificador identifica correctamente los cubos de
+      (a) y (f) como irrecuperables y libera el rover.
+\item \textbf{Verificar el corredor de empuje} antes de comprometerse: si el segmento
+      $[\mathbf c,\mathbf g]$ pasa cerca de una pared, hay riesgo de que una desviación
+      lateral meta el cubo en la trampa.
+\end{enumerate}
+\end{hallazgo}
+
+\begin{hallazgo}{H-08}{El umbral de latencia del contrato es inerte}
+\campo{Dónde} Sección 6.4 del contrato oficial, adoptada por el modelo como restricción
+de interfaz RI4: «frenar si la latencia supera $500\ \mathrm{ms}$».
+\campo{Qué} El barrido de N4.4 muestra que el sistema deja de entregar a partir de
+$200\ \mathrm{ms}$, y que la regla nunca dispara por debajo de $500$. Las columnas «con
+corte» y «sin corte» son \textbf{idénticas en los siete puntos del barrido}: por debajo
+del umbral la regla no actúa, y por encima actúa en un régimen donde la tasa de entrega
+ya es cero. Las $14\,220$ frenadas contabilizadas a $800\ \mathrm{ms}$ no cambiaron ni
+un resultado.
+\campo{Impacto} Medio. La regla, tal como está especificada, no modifica el
+comportamiento del sistema en ningún punto del rango probado. Da una sensación de
+protección que no corresponde a ningún efecto medible.
+\campo{Acción} Dos cosas, y la segunda importa más que la primera.
+\begin{enumerate}[label=(\alph*),leftmargin=2em,itemsep=1pt,topsep=2pt]
+\item Bajar el umbral a la zona donde todavía hay algo que proteger: la degradación es
+      medible a $100\ \mathrm{ms}$ y severa a $200$.
+\item \textbf{Diseñar el bucle completo para operar por debajo de $100\ \mathrm{ms}$},
+      no de $500$. El presupuesto de latencia real ---captura, proceso, red, decisión,
+      transmisión al rover--- es cinco veces más ajustado de lo que sugiere el contrato.
+      Con la telemetría a $20\ \mathrm{Hz}$ el intervalo entre mensajes ya es
+      $50\ \mathrm{ms}$: queda muy poco margen para todo lo demás.
+\end{enumerate}
+\end{hallazgo}
+
+% =========================================================================
+\section{Correcciones aplicadas}
+
+\subsection{Al modelo matemático}
+
+\begin{enumerate}[label=\arabic*.,leftmargin=2.4em,itemsep=3pt]
+\item \textbf{Rango de $\delta$} (H-02): corregido a $[-180\grados,180\grados)$, con una
+      observación nueva que demuestra por qué $+180\grados$ es inalcanzable y qué
+      significa operativamente. El documento del modelo pasa de 27 a 28 páginas.
+\item \textbf{Regla avance/retroceso} (H-04): la regla exacta $A+B>180\grados$ se deriva
+      de la identidad $|\delta(\varphi_0+180\grados,x)| = 180\grados-|\delta(\varphi_0,x)|$
+      y debe agregarse como corolario del teorema \textsc{gtg}.
+\item \textbf{Costo de un quiebre} (N3.6): el modelo declaraba $279\ \mathrm{mm}$
+      equivalentes, que es el término retirada $+$ arco. El costo completo, incluyendo la
+      reorientación, es $399\ \mathrm{mm}$.
+\item \textbf{Zona trampa} (H-09): resultado geométrico nuevo, no previsto en el modelo,
+      que merece su propia proposición.
+\end{enumerate}
+
+\subsection{Al banco de pruebas}
+
+\begin{enumerate}[label=\arabic*.,leftmargin=2.4em,itemsep=3pt]
+\item \textbf{Modelo de oclusión}: de huellas a siluetas (ver 4.5.1). Sin esta
+      corrección, el nivel N4 habría reproducido el mismo defecto que denuncia en H-01.
+\item \textbf{Poses iniciales} (H-06): separadas $7$ celdas en vez de $3$.
+\item \textbf{Manejo de frontera}: proyección de vuelta al tablero en lugar de reversión
+      del paso, que dejaba al rover atrapado si llegaba fuera.
+\item \textbf{Criterio de N3.1}: el umbral original del $35\%$ era arbitrario y sin
+      fundamento. Se reemplazó por una verificación geométrica (la región debe estar del
+      lado opuesto al depósito y ser coherente punto a punto), y la fracción pasó de
+      criterio a resultado. Es un caso de la regla de detención (c) del protocolo: el
+      criterio de aceptación estaba mal, y queda escrito que lo estaba.
+\end{enumerate}
+
+% =========================================================================
+\section{Qué quedó sin cubrir}
+
+\begin{table}[htbp]
+\centering
+\small
+\caption{Límites declarados de esta campaña de pruebas.}
+\begin{tabular}{p{4.6cm}p{9.6cm}}
+\toprule
+Área & Estado \\
+\midrule
+Mecánica del contacto & N4.7 muestra que el modelo de rotación cuasiestático usado
+($r_g^2 = L^2/6$, centro instantáneo) \textbf{no es cuantitativamente confiable}:
+resulta no monótono en el desplazamiento lateral $e$ y no produce deriva lateral, que
+físicamente debería existir. Solo el caso $e=0$ está verificado (deriva nula a
+$1{,}7\times10^{-13}$ grados, por simetría). Cuantificar la rotación inducida exige un
+modelo de fricción, que está fuera del alcance declarado. \\
+\addlinespace
+Controlador de bajo nivel & No se sintetizó ni se probó. El planificador de N4 usa un
+control proporcional mínimo, suficiente para ejercitar la geometría pero no
+representativo del comportamiento del rover real con IMU y PID. \\
+\addlinespace
+Fusión sensorial & El sensor de color, el ultrasónico, los infrarrojos y la IMU no
+participan de ninguna prueba. El lazo cerrado usa exclusivamente la telemetría de
+visión. \\
+\addlinespace
+Coordinación multi-agente & Solo la condición geométrica de compatibilidad (N3.8) y una
+regla de cesión por pares. H-07 mide lo que falta. \\
+\addlinespace
+Cámara real & Todas las pruebas de visión usan el generador sintético. La calibración
+con cámara física, la iluminación real y el comportamiento del plástico de los cubos
+quedan sin verificar. \\
+\addlinespace
+Comunicación & El transporte TCP/NDJSON no se ejercitó: el simulador entrega el mensaje
+en memoria. La latencia se modela como retardo puro, sin pérdidas de paquetes ni
+reconexiones. \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% =========================================================================
+\section{Recomendaciones, en orden}
+
+\begin{enumerate}[label=\textbf{\arabic*.},leftmargin=2.6em,itemsep=6pt]
+\item \textbf{Implementar la estimación del ángulo del cubo} (H-11). Ya no es una
+      optimización: con $W_u = 93{,}50\ \mathrm{mm}$ hay un $22{,}8\%$ de orientaciones
+      en las que el empuje ciego no tiene margen de control alguno. El contrato v1 no
+      publica el ángulo aunque el detector oficial lo calcule, así que la estimación
+      corre del lado del cliente, con los estimadores cerrados de N1. La regla operativa
+      es apuntar el empuje a menos de $21\grados$ de la normal a una cara.
+
+\item \textbf{Rediseñar el planificador para un cuerpo largo} (H-12, H-14, H-15). Tres
+      reglas, todas ya implementadas y verificadas, que no existían: acceso en dos tramos
+      con anillo de maniobra de $156\ \mathrm{mm}$; retirada recta de $55\ \mathrm{mm}$
+      antes de girar; y los demás cubos como obstáculos de navegación con $92\ \mathrm{mm}$
+      de despeje lateral. Sin ellas el rover deshace su propio trabajo: $4$ des-entregas
+      por corrida.
+
+\item \textbf{Rehacer la medición con calibre cuando esté el rover definitivo.} El actual
+      es una versión preliminar medida con regla escolar. Los tres números a confirmar:
+      canal $93{,}50$, huella $99{,}50$, alcance de paletas $55$. Verificar también la zona
+      de salida (H-06: ¿entran los dos rovers?).
+
+\item \textbf{Elevar a la organización los tres hallazgos del repositorio oficial:}
+      H-01 (contacto y oclusión geométricamente imposibles en el simulador), H-06 (poses
+      iniciales solapadas) y H-03 (la bandera de confiabilidad no sirve para el ángulo).
+      Los tres son verificables en cinco minutos y los tres afectan a todos los equipos.
+
+\item \textbf{Diseñar el bucle para $100\ \mathrm{ms}$, no para $500$} (H-08). El
+      presupuesto de latencia real es cinco veces más ajustado que el que sugiere el
+      contrato.
+
+\item \textbf{Implementar la regla de la zona trampa} (H-09) antes que cualquier
+      optimización de rutas. Perder un cubo contra una pared cuesta más que cualquier
+      ganancia de eficiencia, y la regla es barata: no empujar hacia el borde, y
+      abandonar lo irrecuperable.
+
+\item \textbf{Tratar el multi-tramo como camino principal} (H-05): lo necesita el
+      $25{,}7\%$ de las posiciones iniciales posibles.
+
+\item \textbf{Construir la coordinación real} (H-07), usando la condición de corredores
+      disjuntos de N3.8 como criterio de asignación.
+
+\item \textbf{No usar B4 solo} (N1.11). La cascada correcta es: B2 sobre cada arista
+      candidata, mediana circular, descarte de incompatibles, y recién entonces B4 sobre
+      los supervivientes.
+
+\item \textbf{Repetir N2 con la cámara real} cuando esté montada. Es la única prueba de
+      esta campaña cuyo resultado podría cambiar con hardware físico.
+\end{enumerate}
+
+\begin{tcolorbox}[colback=black!3,colframe=black!55,boxrule=0.6pt,arc=1pt]
+\textbf{Conclusión.} El núcleo geométrico del modelo ---la parametrización del cuadrado,
+los estimadores de pose, la cota de anchura proyectada y el embudo de tolerancia--- se
+sostiene sin una sola excepción sobre millones de casos. Lo que las pruebas encontraron
+no fueron errores de álgebra sino \emph{consecuencias no previstas} de esa misma
+geometría: la zona trampa, la magnitud real de la región sin empuje directo y el costo
+verdadero de un quiebre. Y encontraron tres defectos en la infraestructura oficial que
+ningún equipo puede permitirse descubrir el día de la competencia.
+
+\medskip
+Pero la lección más cara del trabajo no la dio la matemática sino un dato: las dimensiones
+del rover. Se supuso un ancho de $120\ \mathrm{mm}$ y era $98{,}66$; se creyó que $98{,}66$
+era el ancho útil y era $93{,}50$; se creyó que el rover medía $94\ \mathrm{mm}$ de largo
+y mide $150$. Cada corrección de esos números redujo el margen: la del ancho llevó la
+tolerancia lateral por debajo de la incertidumbre de la propia visión (H-11), y la del
+largo hizo crecer el envolvente un $66\%$ (H-12), con lo que el rover pasó a estorbarse a
+sí mismo. La conclusión que el modelo sostenía en su primera versión ---que se podía
+empujar sin conocer el ángulo del cubo--- \textbf{no sobrevivió al dato real}. Nada en el
+álgebra lo anticipaba; solo medirlo lo mostró.
+
+\medskip
+Conviene enunciar el corolario metodológico, porque se repitió tres veces en este trabajo
+y siempre con el mismo signo: \textbf{cada vez que un dato supuesto fue reemplazado por
+uno real, el margen se achicó}. Nunca al revés. Un modelo alimentado con valores de
+relleno no es un modelo optimista por casualidad: es optimista porque los valores de
+relleno se eligen cómodos. La única defensa es medir temprano, y medir lo que el modelo
+usa, no lo que es fácil de medir.
+\end{tcolorbox}
+
+\newpage
+% =========================================================================
+\section{Adenda: revisión con las dimensiones reales}
+\label{sec:adenda}
+
+Después de cerrar la campaña de pruebas surgieron cuatro correcciones de hecho que
+obligan a revisar parte de los resultados. Se documentan aquí, con lo que cambió y lo que
+no, en vez de reescribir el informe en silencio. La última ---el archivo de piezas
+separadas--- es la que produjo el hallazgo de mayor severidad de todo el trabajo.
+
+\subsection{Corrección 1 --- El área de juego no tiene paredes}
+
+La superficie de $1\times1\ \mathrm{m}$ \textbf{no tiene bordes verticales}: lo que la
+sobrepasa cae al vacío. El hallazgo H-09 se había formulado como «el rover choca contra
+una pared y no puede ponerse detrás del cubo». El mecanismo es otro, y la consecuencia
+tiene dos mitades opuestas.
+
+\paragraph{Se relaja la restricción cinemática.} Contra una pared el rover no puede
+sobresalir; contra un precipicio puede voladizo, y cae recién cuando su polígono de
+apoyo deja de contener al centro de masa. La condición operativa pasa a ser que la
+línea de ruedas quede sobre el tablero, no todo el cuerpo.
+
+\paragraph{Y aparece un modo de falla terminal.} Con pared, empujar un cubo contra el
+borde lo deja trabado; sin pared, el cubo \textbf{cae y se pierde}. Con pared, conducir
+contra el borde produce un roce; sin pared, el rover \textbf{cae y la ronda termina}.
+
+\subsection{Corrección 2 --- Las dimensiones estaban en el repositorio}
+
+El ancho útil entre paletas se había señalado como el parámetro crítico a medir sobre el
+robot físico. No hacía falta: el repositorio incluye
+\texttt{archivos\_fabricacion/CENFOBOT\_Rover\_Rev1.dxf}, el CAD de corte de la cubierta.
+
+\begin{tcolorbox}[colback=black!3,colframe=black!50,boxrule=0.5pt,arc=1pt]
+\textbf{Escala confirmada por tres vías independientes.} El DXF del rover no declara
+unidades. Se verificó contra: (a) las ranuras de ensamble, de exactamente $3{,}00$
+unidades, que es el espesor del acrílico declarado en el \texttt{README}; (b) los dos
+agujeros de la placa frontal, de $16{,}17$ y $16{,}12$ unidades separados $24{,}00$,
+que es el patrón del ultrasónico HC-SR04 ($16\ \mathrm{mm}$ a $24\ \mathrm{mm}$); y
+(c) \texttt{cubos.dxf}, que sí declara milímetros y mide $180{,}30$ de lado, los tres
+cubos de $60\ \mathrm{mm}$ del reto. Las tres fijan $1$ unidad $= 1\ \mathrm{mm}$.
+\end{tcolorbox}
+
+\begin{table}[htbp]
+\centering
+\small
+\caption{Piezas medidas sobre el DXF, y el efecto de la corrección.}
+\begin{tabular}{lrrr}
+\toprule
+Magnitud & supuesto & real (DXF) & cambio \\
+\midrule
+Ancho del chasis $W$ & $120{,}00$ & $\mathbf{98{,}66}$ & $-17{,}8\%$ \\
+Largo del chasis $\Lambda$ & $140{,}00$ & $\mathbf{93{,}20}$ & $-33{,}4\%$ \\
+Radio envolvente $R_{\mathrm{rov}}$ & $92{,}20$ & $67{,}86$ & $-26{,}4\%$ \\
+Distancia de contacto (máx.) & $112{,}43$ & $89{,}03$ & $-20{,}8\%$ \\
+Distancia de puesta & $152{,}43$ & $129{,}03$ & $-15{,}4\%$ \\
+Tolerancia lateral $e_{\max}$ (peor caso) & $17{,}57$ & $\mathbf{6{,}90}$ & $\mathbf{-60{,}7\%}$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+El rover real es \textbf{más chico y más ágil} pero \textbf{sujeta el cubo con mucho
+menos margen}.
+
+\paragraph{Y las paletas son un canal paralelo.} Las dos paletas son paralelas entre sí,
+como los rieles de una vía: una U de esquinas rectas, sin convergencia ni divergencia.
+El modelo de canal del teorema del embudo describe entonces el sistema \emph{sin
+aproximación}, y los valores de $e_{\max}$ no son conservadores sino exactos.
+
+\begin{tcolorbox}[colback=black!5,colframe=black!65,boxrule=0.7pt,arc=1pt]
+\textbf{Una lectura errónea de la fotografía, registrada.} En una revisión intermedia se
+modelaron las paletas como un embudo en V, a partir de la vista frontal del robot armado,
+donde \emph{parecen} abrirse. Es un artefacto de perspectiva: las paletas se proyectan
+hacia adelante y hacia abajo, sus extremos quedan más cerca de la cámara, y la
+perspectiva agranda lo cercano.
+
+Es el segundo intento fallido de sacar geometría de esa misma fotografía: el primero
+había sido escalarla, con dos estimaciones que diferían un $52\%$. La conclusión
+metodológica vale más que el error: \textbf{una fotografía en perspectiva, sin
+referencias métricas en el plano de interés, no sirve para deducir geometría}, ni
+cuantitativa ni cualitativamente. La única fuente confiable sin el robot en la mano es
+el archivo de fabricación.
+
+\medskip
+Ningún número de este informe cambia por la corrección: el código del banco siempre
+implementó el canal paralelo. El embudo existió solo en la prosa de esa revisión.
+\end{tcolorbox}
+
+\paragraph{Y el cubo puede girar libremente dentro del canal.} Como
+$W_u = 93{,}50 > 84{,}85 = L\sqrt2$, no hay orientación que trabe el cubo entre las
+paletas. Eso descarta el atasco, pero también significa que \textbf{nada impide que un
+empuje descentrado lo haga rotar hasta $\Delta = 45\grados$}, que es la orientación de
+peor tolerancia. Un cubo que entra alineado y gira durante el transporte ve su holgura
+caer de $16{,}75$ a $4{,}32\ \mathrm{mm}$ sin que el sistema lo advierta.
+
+\subsection{Corrección 3 --- El archivo de piezas separadas cierra la geometría}
+
+El ancho útil del canal $W_u$ había quedado acotado a $[92{,}66;\ 98{,}66]\ \mathrm{mm}$
+---según las paletas montaran por dentro o por fuera de los paneles laterales--- y
+señalado como la única medición pendiente. El archivo
+\texttt{CENFOBOT\_PIEZAS\_SEPARADAS.dxf}, que contiene las piezas de fabricación
+desplegadas una junto a otra, la resuelve por construcción.
+
+\begin{tcolorbox}[colback=black!3,colframe=black!50,boxrule=0.5pt,arc=1pt]
+\textbf{Cómo se resuelve, sin ambigüedad.} El chasis mide $93{,}50 \times 94{,}00$ de
+cuerpo, y sus bordes verticales están en $224{,}85,\ 227{,}85,\ \dots,\ 321{,}35,\ 324{,}35$:
+las lengüetas sobresalen exactamente $3{,}00$ por lado, que es el espesor del acrílico.
+Una lengüeta de espesor igual al del material es una \textbf{junta pasante}: atraviesa la
+ranura del panel lateral y queda enrasada con su cara exterior. Por lo tanto la cara
+\emph{interior} del panel coincide con el borde del cuerpo del chasis, y
+\[
+  W_u = 93{,}50\ \mathrm{mm}, \qquad
+  W_{\mathrm{ext}} = 93{,}50 + 2\cdot 3{,}00 = 99{,}50\ \mathrm{mm}.
+\]
+Esto confirma exactamente la fórmula que había propuesto el autor: ancho total menos los
+$6\ \mathrm{mm}$ de los dos espesores. La medición con calibre sobre el robot armado
+sigue siendo deseable como verificación, pero ya no es una incógnita del modelo.
+\end{tcolorbox}
+
+\begin{table}[htbp]
+\centering
+\small
+\caption{Piezas del archivo de fabricación separado. Escala: $1$ unidad $= 1\ \mathrm{mm}$
+(\texttt{\$INSUNITS} $=4$, milímetros, declarado en el archivo).}
+\begin{tabular}{lrl}
+\toprule
+Pieza & Dimensiones (mm) & Nota \\
+\midrule
+Chasis (cuerpo) & $93{,}50 \times 94{,}00$ & define $W_u$ y $\Lambda$ \\
+Chasis (con lengüetas) & $99{,}50 \times 94{,}00$ & huella exterior $W_{\mathrm{ext}}$ \\
+Panel lateral (${\times}2$) & $52{,}50 \times 106{,}00$ & \\
+Placa frontal & $99{,}38 \times 42{,}63$ & tramos rectos $99{,}00$ \\
+Tapa superior & $72{,}09 \times 51{,}53$ & \\
+Placa trasera & $66{,}00 \times 22{,}00$ & \\
+Soporte de motor (${\times}2$) & $47{,}90 \times 28{,}60$ & \\
+Lengüeta pasante & $3{,}00$ por lado & $=$ espesor del acrílico \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{tcolorbox}[colback=black!5,colframe=black!65,boxrule=0.7pt,arc=1pt]
+\textbf{Dos anchos distintos, y confundirlos es un error.} El modelo usa ahora
+\emph{dos} anchos que no son intercambiables:
+\begin{itemize}[leftmargin=1.6em,itemsep=2pt,topsep=3pt]
+\item $W_{\mathrm{ext}} = 99{,}50\ \mathrm{mm}$, la \textbf{huella exterior}. Gobierna
+      colisiones, radio envolvente $R_{\mathrm{rov}}$ e inflado de obstáculos.
+\item $W_u = 93{,}50\ \mathrm{mm}$, el \textbf{ancho útil del canal}. Gobierna
+      $e_{\max}$ y todo el presupuesto de error lateral.
+\end{itemize}
+Usar $W_{\mathrm{ext}}$ donde va $W_u$ infla la tolerancia lateral un $69\%$
+($4{,}32 \to 7{,}32\ \mathrm{mm}$ en el peor caso) y hace desaparecer el hallazgo H-11.
+El banco de pruebas fue corregido para llevar las dos constantes por separado.
+\end{tcolorbox}
+
+\subsection{Qué cambió en los resultados}
+
+\begin{table}[htbp]
+\centering
+\small
+\caption{Resultados revisados. Todo lo que no aparece aquí no cambió.}
+\begin{tabular}{llrr}
+\toprule
+Prueba & Magnitud & antes & después \\
+\midrule
+N3.1 & Cancha sin empuje directo & $36{,}3\%$ & $25{,}7\%$ \\
+N3.2 & $e_{\max}$ & $[17{,}57;\ 30{,}00]$ & $[\mathbf{4{,}32};\ 16{,}75]$ mm \\
+N3.5 & Umbral de cuerda del anillo & $84{,}9\grados$ & $92{,}59\grados$ \\
+N3.6 & Costo de un quiebre de $90\grados$ & $399\ \mathrm{mm}$ & $363\ \mathrm{mm}$ \\
+N3.9 & Zona de exclusión (pared) & $11{,}22\%$ & $5{,}03\%$ \\
+N3.9 & Zona de exclusión (precipicio) & --- & $\mathbf{2{,}76\%}$ \\
+N3.10 & Ventana angular admisible & --- & $|\Delta| \le 20{,}97\grados$ \\
+N3.10 & Banda de presupuesto negativo & --- & $\mathbf{(34{,}76;\ 55{,}24)\grados}$ \\
+N4.1 & Misión nominal, 1 rover & $3/3$ en $33{,}0$ s & $3/3$ en $33{,}4$ s \\
+N4.1 & Misión nominal, 2 rovers & $3/3$, 2 colisiones & $3/3$, \textbf{0 colisiones} \\
+N4.2 & Tasa de entrega, 1 rover & $99{,}5\%$ & $98{,}5\%$ \\
+N4.2 & Corridas limpias, 2 rovers & $0\%$ & $\mathbf{94{,}5\%}$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Las diez pruebas de N3 ---la nueva N3.10 incluida--- vuelven a pasar sin excepción con
+los parámetros nuevos, igual que N0 a N2.
+El rover más chico \emph{mejora} el desempeño en lazo cerrado: llega a más lugares,
+necesita menos espacio detrás del cubo y estorba menos al otro rover.
+
+\subsection{Lo que empeoró, y es lo que importa}
+
+\begin{tcolorbox}[colback=black!5,colframe=black!65,boxrule=0.7pt,arc=1pt]
+\textbf{El presupuesto de control dejó de existir en el peor caso.} Con
+$e_{\max} = 4{,}32\ \mathrm{mm}$ y $\sigma_{\mathrm{vis}} = 5$, el presupuesto de control
+es
+\[
+  4{,}32 - 5{,}00 \;=\; \mathbf{-0{,}68\ \mathrm{mm}} ,
+\]
+negativo. No hay precisión de rumbo que rescate ese caso: la incertidumbre de la
+medición, sola, ya excede la tolerancia. La banda afectada es
+$\Delta \in (34{,}76\grados;\ 55{,}24\grados)$, el $22{,}8\%$ de las orientaciones.
+
+Con el empuje alineado a una cara ($\Delta \equiv 0 \bmod 90\grados$), $e_{\max}$ sube a
+$16{,}75\ \mathrm{mm}$, el presupuesto a $11{,}75$, y la exigencia de rumbo pasa a ser
+\[
+  \epsilon_\theta \le \arcsin\!\left(\frac{11{,}75}{129{,}43}\right) = \mathbf{5{,}21\grados},
+\]
+que sí es alcanzable. La ventana práctica, reservando $3\ \mathrm{mm}$ de margen de
+control, es $|\Delta| \le 20{,}97\grados$: el $46{,}6\%$ de las orientaciones, y cuatro
+direcciones admisibles por cubo.
+
+\medskip
+\textbf{Esto no matiza la conclusión número dos del modelo original: la invierte.} Con
+el ancho supuesto, conocer $\theta$ era una mejora de eficiencia. Con el cuerpo del
+chasis, una palanca de robustez. Con el ancho útil real del canal es \textbf{condición
+de funcionamiento}: hay orientaciones en las que el empuje ciego no tiene margen alguno.
+El error angular del detector oficial con el cubo despejado es de $0{,}43\grados$ de
+media (N2.2), holgadamente suficiente para satisfacer la ventana --- pero el contrato v1
+no publica el ángulo, de modo que la estimación hay que hacerla del lado del cliente.
+\end{tcolorbox}
+
+\subsection{Lo que falta medir ahora}
+
+El archivo de piezas separadas cerró la incógnita que gobernaba el modelo. Queda muy
+poco.
+
+\begin{enumerate}[label=\textbf{\arabic*.},leftmargin=2.6em,itemsep=3pt]
+\item \textbf{Verificación, no medición:} confirmar con calibre que el robot armado mide
+      $99{,}50\ \mathrm{mm}$ punta a punta. Si el valor coincide, $W_u = 93{,}50$ queda
+      confirmado y con él todo el hallazgo H-11.
+\item $\lambda$, el alcance de las paletas por delante de la placa frontal. \textbf{No
+      afecta a $e_{\max}$}, que es la magnitud crítica; fija la distancia de contacto y
+      con ella el punto de puesta, y el modelo lo trata mediante una cota válida
+      cualquiera sea $\lambda$.
+\end{enumerate}
+
+El ángulo de divergencia salió del problema al confirmarse que las paletas son
+paralelas; el ancho útil salió al aparecer el archivo de piezas separadas. La
+parametrización geométrica del modelo está cerrada.
+
+\subsection{Corrección 4 --- El rover físico, medido}
+\label{sec:medido}
+
+Se midió el rover armado con regla escolar sin calibrar, sobre una \textbf{versión
+preliminar} del robot. Las lecturas se tratan como $\pm 1\ \mathrm{mm}$ y ninguna
+conclusión se apoya en un solo número.
+
+\paragraph{Cómo se mide con regla lo que parece necesitar calibrador.} El valor en disputa
+es $W_u$ y el umbral que decide es $94{,}85\ \mathrm{mm}$. Separar $93{,}5$ de $94{,}9$
+sobre un tramo de $94\ \mathrm{mm}$ excede la resolución del instrumento; la misma
+diferencia leída sobre un \emph{hueco de $9\ \mathrm{mm}$}, no. Todas las mediciones
+críticas se plantearon como huecos.
+
+\begin{table}[htbp]
+\centering
+\small
+\caption{Mediciones sobre el rover armado.}
+\begin{tabular}{clrrl}
+\toprule
+\# & Magnitud & predicho & medido & lectura \\
+\midrule
+M1  & Hueco con cubo a $45\grados$ & $8{,}65$ & $9{-}10$ & $W_u = 94{,}35$ \\
+M2  & Hueco con cubo alineado & $33{,}50$ & $33$ & $W_u = 93{,}00$ \\
+M9  & Canal, medido directo & $93{,}50$ & $95$ & $W_u = 95{,}00$ \\
+\midrule
+M6  & Alcance de paletas $\lambda$ & --- & $\mathbf{55}$ & nuevo \\
+M7  & Ancho máximo real & $99{,}50$ & $100$ & concuerda \\
+M8  & Largo máximo real & $149$ & $150$ & concuerda \\
+M10 & Paletas: piso a borde superior & --- & $0$ a $14$ & nuevo \\
+M12 & Aristas del cubo & vivas & vivas & concuerda \\
+M13 & Rueda: diámetro / trocha & --- & $33$ / $89$ & nuevo \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{tcolorbox}[colback=black!3,colframe=black!50,boxrule=0.5pt,arc=1pt]
+\textbf{El control interno se cumple.} La resta $\text{M2}-\text{M1} = 23{,}5\ \mathrm{mm}$
+contra los $L(\sqrt2-1) = 24{,}85$ que exige la identidad geométrica: desvío de
+$1{,}35\ \mathrm{mm}$, compatible con dos lecturas de regla. Las mediciones son
+internamente coherentes.
+\end{tcolorbox}
+
+\paragraph{H-11 queda confirmado, y de forma robusta al error.} Las tres estimaciones de
+$W_u$ ---$94{,}35$, $93{,}00$ y $95{,}00$--- promedian $94{,}05 \pm 0{,}54\ \mathrm{mm}$.
+El valor deducido del archivo de fabricación, $93{,}50$, cae a $1{,}0\sigma$: la medición
+\emph{no lo refuta}. Y lo que importa no es el valor sino su consecuencia:
+\[
+  e^{\max}_{\mathrm{control}}(45\grados) \in [\,-0{,}94;\ +0{,}13\,]\ \mathrm{mm}
+  \quad \text{para todo } W_u \text{ en } \pm2\sigma .
+\]
+\textbf{El presupuesto lateral es cero dentro del error de medición, cualquiera sea el
+valor que se tome.} No hace falta un instrumento mejor para sostener la conclusión.
+
+\paragraph{Lo que la medición sí refutó.} El alcance de las paletas,
+$\lambda = 55\ \mathrm{mm}$, no estaba en el archivo de fabricación y el modelo lo había
+esquivado con una cota. Medido, produce el hallazgo H-12: el envolvente real es
+$113{,}49\ \mathrm{mm}$ y no $68{,}44$. De ahí se desprendieron, al rehacer el simulador,
+los hallazgos H-13, H-14 y H-15.
+
+\paragraph{Lo que confirmó, y el modelo no sabía.} Las paletas llegan al piso sin
+separación medible: el polígono de apoyo son las dos ruedas más las puntas de los brazos,
+exactamente como se había postulado \emph{sin evidencia} en el modelo del precipicio. De
+ahí se sigue que una paleta en voladizo sobre el vacío no vuelca al rover, y por eso la
+restricción de frontera se evalúa sobre el chasis y no sobre la huella completa. Además,
+las paletas abarcan de $0$ a $14\ \mathrm{mm}$ de altura, así que el empuje actúa muy por
+debajo de la mitad del cubo: no hay riesgo de vuelco y la hipótesis H6 queda respaldada.
+
+\subsection{El simulador ahora tiene forma de U}
+
+Hasta esta revisión el rover era \textbf{un solo rectángulo} en el simulador, de modo que
+el cubo era empujado por la cara frontal del chasis y \textbf{el canal entre paletas no
+existía}. Con eso, el resultado central del modelo ---el embudo de tolerancia, y con él
+H-11--- no podía ser ni confirmado ni refutado en lazo cerrado: la prueba no tocaba el
+mecanismo.
+
+El rover se modela ahora como tres piezas: el cuerpo, que empuja, y dos paletas, que
+contienen sin empujar ---resuelven la penetración lateral sin transmitir avance ni
+rotación, que es exactamente lo que dice la proposición del canal---. Es el cambio que
+destapó H-13, H-14 y H-15.
+
+\subsection{El resultado que separa la geometría del planificador}
+
+\begin{tcolorbox}[colback=black!5,colframe=black!65,boxrule=0.7pt,arc=1pt]
+\textbf{Prueba N4.8, y es la más informativa de toda la campaña.} Treinta semillas, un
+rover, los mismos tres cubos:
+
+\medskip
+\centering
+\begin{tabular}{lrr}
+\toprule
+Configuración & entregados de 3 & des-entregas \\
+\midrule
+Un cubo por vez, misiones independientes & $\mathbf{3{,}00}$ & $0{,}00$ \\
+Los tres a la vez & $\mathbf{1{,}00}$ & $\mathbf{4{,}00}$ \\
+\bottomrule
+\end{tabular}
+
+\raggedright
+\medskip
+\textbf{La geometría del empuje no es el problema.} Un cubo solo se entrega siempre, con
+la geometría corregida y el canal real. Lo que colapsa ---un $67\%$ de caída--- es hacer
+tres seguidos sin perturbar a los otros dos.
+
+\smallskip
+Y el mecanismo está medido: $4$ des-entregas por corrida. El rover no falla en entregar,
+\textbf{deshace entregas ya conseguidas}. Es una falla del planificador, no del modelo
+geométrico: la capa de navegación con obstáculos que hace falta ---inflado de Minkowski,
+grafo de visibilidad, corredores disjuntos--- está desarrollada en el modelo, pero el
+planificador nunca la usó porque con la huella supuesta no hacía falta.
+\end{tcolorbox}
+
+\begin{tcolorbox}[colback=black!3,colframe=black!50,boxrule=0.5pt,arc=1pt]
+\textbf{Honestidad sobre qué se está midiendo.} La caída de la misión nominal de $3/3$ a
+$1/3$ es un enunciado \emph{conjunto} sobre la geometría real \emph{y} este planificador
+en particular, que fue escrito para un rover compacto. Un planificador rediseñado para un
+cuerpo largo con paletas debería recuperar buena parte de esa pérdida: N4.8 muestra que la
+geometría lo permite. Lo que no se recupera con software son H-11 y H-12, que son
+consecuencias de las dimensiones y valen para cualquier planificador.
+\end{tcolorbox}
+
+\subsection{Balance de las tres correcciones}
+
+\begin{table}[htbp]
+\centering
+\small
+\caption{Qué aportó cada corrección de hecho.}
+\begin{tabular}{p{3.4cm}p{5.4cm}p{5.4cm}}
+\toprule
+Corrección & Qué cambió & Qué no cambió \\
+\midrule
+\textbf{Sin paredes} &
+La zona de exclusión baja de $11{,}22\%$ a $2{,}76\%$: el rover puede quedar en
+voladizo. Aparece un modo de falla terminal: cubo o rover que caen se pierden. &
+La restricción geométrica sigue existiendo. Para alejar un cubo del borde el rover tiene
+que ponerse entre el cubo y el vacío. \\
+\addlinespace
+\textbf{Dimensiones del DXF} &
+$e_{\max}$ cae un $60{,}7\%$. La precisión de rumbo exigida pasa de $4{,}73\grados$ a
+$0{,}84\grados$ en el peor caso. Conocer $\theta$ deja de ser opcional. &
+Los estimadores, la cota de anchura y toda la matemática de N0 a N2. El rover más chico
+\emph{mejora} el desempeño en lazo cerrado. \\
+\addlinespace
+\textbf{Paletas paralelas} &
+La lectura del modelo: $e_{\max}$ pasa de cota conservadora a valor exacto. Se agrega la
+libertad de giro del cubo dentro del canal. &
+\textbf{Ningún número.} El código siempre implementó el canal paralelo; el embudo estuvo
+solo en la prosa. \\
+\addlinespace
+\textbf{DXF de piezas separadas} &
+$W_u = 93{,}50$ queda determinado por la junta pasante. $e_{\max}$ cae a
+$[4{,}32;\ 16{,}75]$ y el presupuesto de control se vuelve \textbf{negativo} en el
+$22{,}8\%$ de las orientaciones (H-11). Aparece la ventana angular $|\Delta|\le 21\grados$
+como restricción de interfaz. &
+La factibilidad: $L\sqrt2 = 84{,}85 < 93{,}50$, el cubo sigue entrando siempre. El
+desempeño en lazo cerrado, que no modela el error lateral fino. \\
+\addlinespace
+\textbf{Medición del rover físico} &
+Confirma $W_u$ y con él H-11, de forma robusta al error de la regla. Mide
+$\lambda = 55\ \mathrm{mm}$, que nadie tenía: el envolvente crece un $66\%$ (H-12), y
+al rehacer el simulador con forma de U aparecen H-13, H-14 y H-15. La misión nominal cae
+de $3/3$ a $1/3$. &
+Todo N0 a N2, y las cotas geométricas: el error de la regla ($\pm1\ \mathrm{mm}$) no
+alcanza para mover ninguna conclusión. Un cubo aislado se sigue entregando siempre. \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{tcolorbox}[colback=black!3,colframe=black!55,boxrule=0.6pt,arc=1pt]
+\textbf{Lo que las tres correcciones tienen en común.} Ninguna vino de una prueba: las
+tres vinieron de conocimiento del hardware que el modelo no tenía. Las pruebas
+verificaron que la matemática era correcta ---y lo era, sin excepción en $46$ pruebas---
+pero no podían detectar que estaba describiendo un rover de $120\ \mathrm{mm}$ con
+paredes y embudo, que no existe.
+
+Es el límite estructural de toda la campaña, y conviene tenerlo escrito:
+\textbf{la verificación demuestra consistencia, no correspondencia}. Para lo segundo hace
+falta o el hardware, o un archivo de fabricación, o alguien que conozca el sistema. En
+este caso llegaron los tres, en ese orden inverso.
+\end{tcolorbox}
+
+\end{document}

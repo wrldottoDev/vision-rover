@@ -1,0 +1,38 @@
+================================================================================================
+NIVEL N4 --- LAZO CERRADO
+================================================================================================
+
+           config         entregados    tiempo    colis  salidas   dist_final_celdas
+           1 rover              3/3       33.0        0        0   green=0.36  blue=0.81  red=0.78
+           2 rovers             3/3       23.2        2        0   green=0.51  blue=0.87  red=0.90
+[  OK  ] N4.1    Mision nominal sin perturbacion                      1r_entregados=3  1r_tiempo_s=33  1r_colisiones=0  1r_salidas=0
+
+           config           tasa_3/3     t_p50     t_p90 colis_med corridas_limpias
+           1 rover             0.995      43.9      47.8       0.0         100.0%
+           2 rovers            0.970      30.3      59.8      22.4           0.0%
+[  OK  ] N4.2    Mision con perturbacion nominal (200 semillas)       1r_tasa=0.995  1r_t_p50=43.875  1r_t_p90=47.85  1r_colis_medias=0
+           · HALLAZGO H-07: con dos rovers la entrega se mantiene pero aparecen colisiones.
+           · La regla de cesion por pares (unica coordinacion implementada) NO alcanza.
+           · Es coherente con N3.8: el 46%% de los pares de corredores interfiere.
+           · La capa de coordinacion multi-agente esta FUERA del alcance del modelo,
+           · y esta prueba mide exactamente cuanto cuesta esa ausencia.
+
+              sigma_c     sigma_mm   tasa_3/3  cubos_medio      t_p50
+                 0.00          0.0       1.00         3.00       36.2
+                 0.05          1.0       1.00         3.00       42.6
+                 0.10          2.0       0.93         2.92       47.8
+                 0.20          4.0       0.93         2.92       56.1
+                 0.30          6.0       0.82         2.80       67.9
+                 0.40          8.0       0.65         2.52       89.1
+                 0.50         10.0       0.62         2.50       94.4
+                 0.70         14.0       0.33         2.00      180.0
+                 1.00         20.0       0.07         1.32      180.0
+[ INFO ] N4.3    Barrido de ruido posicional hasta el punto de ruptur curva=[(0.0, 1.0), (0.05, 1.0), (0.1, 0.925), (0.2, 0.925), (0.3, 0.825), (0.4, 0.65), (0.5, 0.625), (0.7, 0.325), (1.0, 0.075)]  punto_ruptura_celdas=0.7  punto_ruptura_mm=14  presupuesto_modelo_mm=12.57
+           · barrido con UN rover, para aislar el modelo de la coordinacion ausente.
+           · el modelo predice un presupuesto lateral de control de 12.57 mm.
+           · la ruptura medida ocurre a sigma = 14.0 mm (1.1x el presupuesto).
+
+               lat_ms tasa_con_corte tasa_sin_corte       frenos
+                    0           0.97           0.97            0
+                   50           0.97           0.97            0
+                  100           1.00           1.00            0

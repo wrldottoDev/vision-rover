@@ -1,0 +1,114 @@
+================================================================================================
+NIVEL N4 --- LAZO CERRADO
+================================================================================================
+
+           config         entregados    tiempo    colis  salidas   dist_final_celdas
+           1 rover              1/3      180.0        0        5   green=2.97  blue=0.92  red=1.15
+           2 rovers             0/3      180.0        1       16   green=2.97  blue=1.13  red=6.08
+[ FALLA] N4.1    Mision nominal sin perturbacion                      1r_entregados=1  1r_tiempo_s=180  1r_colisiones=0  1r_salidas=5
+           · FALLA: 1 rover: deben entregarse los 3 cubos
+           · FALLA: 2 rovers: deben entregarse los 3 cubos
+
+           config           tasa_3/3     t_p50     t_p90 colis_med corridas_limpias
+           1 rover             0.000     180.0     180.0       0.0         100.0%
+           2 rovers            0.067     180.0     180.0       4.2          71.7%
+[ FALLA] N4.2    Mision con perturbacion nominal (200 semillas)       1r_tasa=0  1r_t_p50=180  1r_t_p90=180  1r_colis_medias=0
+           · FALLA: 1 rover: tasa de entrega completa >= 95%
+           · FALLA: 2 rovers: tasa de entrega completa >= 95%
+           · HALLAZGO H-07: con dos rovers la entrega se mantiene pero aparecen colisiones.
+           · La regla de cesion por pares (unica coordinacion implementada) NO alcanza.
+           · Es coherente con N3.8: el 46%% de los pares de corredores interfiere.
+           · La capa de coordinacion multi-agente esta FUERA del alcance del modelo,
+           · y esta prueba mide exactamente cuanto cuesta esa ausencia.
+
+              sigma_c     sigma_mm   tasa_3/3  cubos_medio      t_p50
+                 0.00          0.0       0.00         0.65      180.0
+                 0.05          1.0       0.00         0.45      180.0
+                 0.10          2.0       0.00         0.42      180.0
+                 0.20          4.0       0.00         0.50      180.0
+                 0.30          6.0       0.00         0.30      180.0
+                 0.40          8.0       0.03         0.35      180.0
+                 0.50         10.0       0.00         0.30      180.0
+                 0.70         14.0       0.00         0.45      180.0
+                 1.00         20.0       0.00         0.28      180.0
+[ INFO ] N4.3    Barrido de ruido posicional hasta el punto de ruptur curva=[(0.0, 0.0), (0.05, 0.0), (0.1, 0.0), (0.2, 0.0), (0.3, 0.0), (0.4, 0.025), (0.5, 0.0), (0.7, 0.0), (1.0, 0.0)]  punto_ruptura_celdas=0  punto_ruptura_mm=0  presupuesto_modelo_mm=12.57
+           · barrido con UN rover, para aislar el modelo de la coordinacion ausente.
+           · el modelo predice un presupuesto lateral de control de 12.57 mm.
+           · la ruptura medida ocurre a sigma = 0.0 mm (0.0x el presupuesto).
+
+               lat_ms tasa_con_corte tasa_sin_corte       frenos
+                    0           0.00           0.00            0
+                   50           0.00           0.00            0
+                  100           0.00           0.00            0
+                  200           0.00           0.00            0
+                  400           0.00           0.00            0
+                  800           0.00           0.00        14220
+                 1600           0.00           0.00        14028
+[ INFO ] N4.4    Barrido de latencia, con y sin la regla de corte RI4 tabla=[(0, 0.0, 0.0, 0), (50, 0.0, 0.0, 0), (100, 0.0, 0.0, 0), (200, 0.0, 0.0, 0), (400, 0.0, 0.0, 0), (800, 0.0, 0.0, 14220), (1600, 0.0, 0.0, 14028)]  tasa_con_corte_lat_alta=0  tasa_sin_corte_lat_alta=0  tasa_con_corte_lat_baja=0
+
+           escenario                         entregado   tiempo   colis   salid  dist_fin irrecuperables
+           (a) cubo en esquina opuesta           0/1      120.0       0       0     54.45 green
+           (b) cubo pegado a la pared            1/1       17.4       0       0      0.86 -
+           (c) dos cubos adyacentes              0/2      120.0       0       0      3.51 green
+           (d) cubo ajeno en el corredor         2/2       41.7       0       0      0.77 -
+           (e) corredores cruzados               1/2      120.0      51       0      0.76 green
+           (f) cubo sobre deposito ajeno         0/1      120.0       0       0     53.74 green
+[  OK  ] N4.5    Escenarios adversarios                               (a)_irrecuperables=['green']  (a)_entregados=0  (a)_dist_min=54.45  (b)_irrecuperables=[]
+           · (a) y (f) colocan el cubo en la ZONA TRAMPA (hallazgo H-09): no existe
+           · secuencia de empujes que lo saque. El planificador lo detecta y lo abandona,
+           · que es la conducta correcta: no gasta la ronda empujando contra una pared.
+           · (e) exhibe colisiones, que es el hallazgo H-07 (falta coordinacion).
+
+           muestras en fase de empuje: 129
+           oclusion del cubo: media=6.0%  max=26.7%
+           age_ms: media=0  p90=0  max=0
+           fraccion del empuje con age_ms > 200: 0.0%
+           error lateral |e|: media=4.51 mm  max=14.93 mm  (presupuesto 12.57 mm)
+[  OK  ] N4.6    Oclusion prolongada durante el transporte            muestras_empuje=129  oclusion_media=0.0600078  oclusion_max=0.267  age_max_ms=0
+           · el simulador oficial NO puede producir este escenario (hallazgo H-01b):
+           · su radio de oclusion es 2 celdas y el contacto real ocurre a 5-5.6 celdas.
+
+                 e_mm     deriva_ang  deriva_lat_mm      avance_mm
+                  0.0          0.000          0.000          300.4
+                  2.0         32.502          0.000          301.1
+                  5.0         39.335          0.676          300.6
+                 10.0         39.499          5.676          300.7
+                 15.0         38.287         10.676          300.6
+[ INFO ] N4.7    Rotacion del cubo inducida por el empuje descentrado tabla=[(0.0, 1.3500311979441904e-13, 0.0, 300.40000000000214), (2.0, 32.502449137161435, 0.0, 301.05647231683076), (5.0, 39.335284615814516, 0.676134144448099, 300.58002335992296), (10.0, 39.49860253630321, 5.676388020006698, 300.6637798822411), (15.0, 38.28683700964788, 10.67631270315826, 300.5756018934196)]  deriva_ang_e0=1.35e-13  deriva_ang_e15=38.2868  monotona_en_e=False
+           · SOLO ES VALIDO EL CASO e=0: la simetria da deriva nula a 1.7e-13 grados.
+           · Los valores para e distinto de cero NO son cuantitativamente confiables:
+           · el modelo de centro instantaneo cuasiestatico con r_g^2 = L^2/6 resulta
+           · no monotono en e y no produce deriva lateral, que fisicamente deberia haber.
+           · LIMITE DEL ALCANCE: aqui termina la geometria y empieza la mecanica del
+           · contacto (cono de friccion, regla de Mason), que el modelo excluyo.
+           · Para cuantificar la rotacion inducida hace falta un modelo de friccion.
+
+           configuracion              entregados       de 3   desentregas    contactos
+           un cubo por vez                  3.00          3          0.00         13.0
+
+================================================================================================
+NOTA: la corrida completa se corto por limite de tiempo de pared durante N4.8.
+N4.8 se volvio a correr por separado y su salida completa sigue a continuacion.
+================================================================================================
+================================================================================================
+NIVEL N4 --- LAZO CERRADO
+================================================================================================
+
+           configuracion              entregados       de 3   desentregas    contactos
+           un cubo por vez                  3.00          3          0.00         13.0
+           los tres a la vez                1.00          3          4.00        102.0
+[ INFO ] N4.8    Interferencia entre tareas: un cubo por vez contra l entregados_aislado=3  entregados_conjunto=1  desentregas_conjunto=4  caida_pct=66.6667
+           · Aislado el rover entrega 3.00 de 3 cubos; con los tres en cancha, 1.00.
+           · La geometria del EMPUJE no es el problema: un cubo solo se entrega bien.
+           · Lo que colapsa es hacer tres seguidos sin perturbar a los otros dos.
+           · HALLAZGO H-14/H-15: con la forma de U, el rover engancha cubos ajenos y
+           · barre con la paleta el que acaba de entregar. Se deshace trabajo hecho:
+           · 4.00 des-entregas por corrida.
+           · Es una falla del PLANIFICADOR, no del modelo geometrico: la capa de
+           · navegacion con obstaculos (grafo de visibilidad, inflado de Minkowski)
+           · esta en el modelo pero el planificador nunca la uso, porque con la
+           · huella supuesta no hacia falta.
+
+================================================================================================
+RESUMEN N4 (parcial: n48)  ->  INFO: 1
+================================================================================================

@@ -1,7 +1,19 @@
-_source/**/__pycache__/
+# Python
 __pycache__/
 *.pyc
 .pytest_cache/
-runs/
 .venv/
-_source/
+# local run outputs (Monte Carlo, snapshots, debug logs)
+runs/
+# OS / tooling
+.DS_Store
+__MACOSX/
+.claude/
+.env
+*.env
+# reference material: keep extracted text sources, drop redundant archives
+_source/**/*.zip
+_source/**/__pycache__/
+# raw Codex transcripts are huge; the final reports (*_report.md) are kept
+docs/astra/*_raw.log
+docs/codex_log/*_raw.log

@@ -1,0 +1,405 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{mathptmx}
+\usepackage[scaled=0.9]{helvet}
+% --- localización manual (babel-spanish no disponible en esta distribución)
+\renewcommand{\contentsname}{Índice}
+\renewcommand{\appendixname}{Apéndice}
+\renewcommand{\figurename}{Figura}
+\renewcommand{\tablename}{Cuadro}
+\renewcommand{\refname}{Referencias}
+\usepackage[margin=2.4cm]{geometry}
+\usepackage{amsmath,amssymb,amsthm,mathtools}
+\usepackage{booktabs}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,calc,positioning,patterns,decorations.pathreplacing}
+\usepackage{microtype}
+\usepackage{enumitem}
+\usepackage{tcolorbox}
+\usepackage[hidelinks]{hyperref}
+\usepackage{fancyhdr}
+\usepackage{caption}
+
+\tcbuselibrary{skins,breakable}
+
+\captionsetup{font=small,labelfont=bf}
+
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\footnotesize Hoja de medición del rover · Vision Rover Challenge}
+\fancyhead[R]{\footnotesize\thepage}
+\renewcommand{\headrulewidth}{0.4pt}
+
+% ---------------------------------------------------------------- entornos
+\newtheorem{teorema}{Teorema}[section]
+\newtheorem{proposicion}[teorema]{Proposición}
+\newtheorem{lema}[teorema]{Lema}
+\newtheorem{corolario}[teorema]{Corolario}
+\theoremstyle{definition}
+\newtheorem{definicion}[teorema]{Definición}
+\newtheorem{observacion}[teorema]{Observación}
+\newtheorem{ejemplo}[teorema]{Ejemplo}
+
+\newenvironment{demo}{\par\noindent\textit{Demostración.}\;}{\hfill$\blacksquare$\par\medskip}
+
+\newtcolorbox{resultado}[1][]{
+  enhanced, breakable, colback=black!3, colframe=black!55,
+  boxrule=0.5pt, arc=1pt, left=6pt, right=6pt, top=5pt, bottom=5pt, #1}
+
+% ---------------------------------------------------------------- macros
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\Rot}{\mathbf{R}}
+\newcommand{\uu}{\mathbf{u}}
+\newcommand{\vv}{\mathbf{v}}
+\newcommand{\nn}{\mathbf{n}}
+\newcommand{\dd}{\mathbf{d}}
+\newcommand{\cc}{\mathbf{c}}
+\newcommand{\pp}{\mathbf{p}}
+\newcommand{\qq}{\mathbf{q}}
+\newcommand{\NN}{\mathbf{N}}
+\newcommand{\ww}{\mathbf{w}}
+\newcommand{\ee}{\mathbf{e}}
+\newcommand{\gv}{\mathbf{g}}
+\DeclareMathOperator*{\argmin}{arg\,min}
+\DeclareMathOperator*{\argmax}{arg\,max}
+\newcommand{\aaa}{\mathbf{a}}
+\newcommand{\cross}[2]{#1 \wedge #2}
+\newcommand{\dif}{\operatorname{d}\!}
+\newcommand{\atantwo}{\operatorname{atan2}}
+\newcommand{\conv}{\operatorname{conv}}
+\newcommand{\intr}{\operatorname{int}}
+\newcommand{\diam}{\operatorname{diam}}
+\newcommand{\sgn}{\operatorname{sgn}}
+\newcommand{\celda}{\mathrm{c}}
+\newcommand{\grados}{^{\circ}}
+
+\newtcolorbox{medicion}[2]{
+  enhanced, breakable, colback=white, colframe=black!70,
+  boxrule=0.8pt, arc=1pt, left=7pt, right=7pt, top=6pt, bottom=6pt,
+  title={\bfseries #1\ \ ---\ \ #2}, fonttitle=\normalsize,
+  colbacktitle=black!70, coltitle=white}
+
+\newcommand{\campo}[1]{\par\smallskip\noindent\textbf{#1.}\ }
+\newcommand{\anota}[1]{\par\smallskip\noindent\fbox{\parbox[c][1.1cm][c]{0.97\linewidth}{\footnotesize\textsc{medido:}\hfill #1}}}
+
+\begin{document}
+
+\begin{center}
+{\Large\bfseries Hoja de medición del rover CenfoBot}\\[0.25cm]
+{\large Verificación experimental del modelo geométrico}\\[0.5cm]
+\rule{\linewidth}{1pt}
+\end{center}
+
+\vspace{0.2cm}
+
+\noindent
+Esta hoja está pensada para llenarse \textbf{con el rover en la mano y una regla}.
+Cada medición trae el valor que el modelo predice y qué significa si el número real
+no coincide. El orden no es arbitrario: las tres primeras deciden si el hallazgo H-11
+---el que dice que conocer el ángulo del cubo es obligatorio--- se sostiene o se cae.
+
+\begin{tcolorbox}[colback=black!5,colframe=black!65,boxrule=0.7pt,arc=1pt]
+\textbf{Cómo medir con regla lo que parece necesitar calibrador.} El modelo dice
+$W_u = 93{,}50\ \mathrm{mm}$ y la pregunta de fondo es si $W_u$ supera
+$94{,}85\ \mathrm{mm}$. Distinguir $93{,}5$ de $94{,}9$ sobre un tramo de $94$ es
+imposible con regla. Pero esa misma diferencia, medida sobre un \textbf{hueco de
+$9\ \mathrm{mm}$}, se ve a simple vista.
+
+\smallskip
+Todas las mediciones críticas de esta hoja están planteadas como \emph{huecos}, no como
+distancias grandes. Es la misma información, leída donde la regla sí alcanza.
+\end{tcolorbox}
+
+\section*{Bloque A --- Las tres que deciden H-11}
+\addcontentsline{toc}{section}{Bloque A}
+
+\begin{medicion}{M1}{La prueba de los 10 milímetros \textnormal{(la más importante de todas)}}
+\campo{Qué hacer} Meté un cubo entre las paletas, \textbf{girado a $45\grados$} respecto
+del eje del rover (en rombo, con una punta mirando al frente). Empujalo lateralmente
+hasta que toque una paleta. Medí el \textbf{hueco que queda del otro lado}.
+
+\campo{Qué predice el modelo} $8{,}65\ \mathrm{mm}$.
+
+\campo{El umbral que importa} $\mathbf{10{,}00\ \mathrm{mm}}$. No hace falta leer el
+número con precisión: alcanza con saber de qué lado del umbral cae.
+\begin{itemize}[leftmargin=1.6em,itemsep=2pt,topsep=3pt]
+\item \textbf{Si el hueco es menor que $10\ \mathrm{mm}$} $\to$ H-11 confirmado. El
+      presupuesto de control es negativo en el peor caso y el ángulo del cubo es
+      obligatorio.
+\item \textbf{Si es mayor que $10\ \mathrm{mm}$} $\to$ H-11 se suaviza. Sigue siendo
+      apretado, pero deja de ser imposible.
+\end{itemize}
+
+\campo{Truco pasa/no pasa} Si conseguís algo de $10\ \mathrm{mm}$ de espesor conocido
+(dos monedas apiladas medidas antes, un taco de acrílico de $3+3+3$, un lápiz de sección
+conocida), intentá meterlo en el hueco junto al cubo. \textbf{Si no entra, H-11 está
+confirmado} y no hiciste ninguna lectura de regla.
+
+\campo{Por qué esta medición} $e_{\max}$ en el peor caso es exactamente
+\emph{la mitad de este hueco}. Es la única magnitud del modelo que se mide de forma
+directa, sin restar dos números grandes.
+\anota{$\rule{4cm}{0.4pt}$ mm \quad$\Rightarrow$\quad $e_{\max} = \rule{2cm}{0.4pt}$ mm}
+\end{medicion}
+
+\begin{medicion}{M2}{Hueco con el cubo alineado \textnormal{(control de la medición anterior)}}
+\campo{Qué hacer} Lo mismo que M1 pero con el cubo \textbf{alineado} (caras paralelas a
+las paletas), empujado contra una paleta. Medir el hueco del otro lado.
+
+\campo{Qué predice el modelo} $33{,}50\ \mathrm{mm}$.
+
+\campo{El control} La resta $\text{M2} - \text{M1}$ debe dar
+$L(\sqrt2 - 1) = \mathbf{24{,}85\ \mathrm{mm}}$, \emph{cualquiera sea el valor de
+$W_u$}. Es una identidad geométrica que solo depende de la arista del cubo.
+
+\smallskip
+Si la resta da $24{,}85 \pm 1$, las dos mediciones son buenas y se pueden creer. Si da
+otra cosa, algo se midió mal ---o el cubo no mide $60\ \mathrm{mm}$, o las paletas no
+son paralelas--- y hay que repetir antes de seguir.
+\anota{$\rule{4cm}{0.4pt}$ mm \quad$\Rightarrow$\quad M2 $-$ M1 $= \rule{2cm}{0.4pt}$ mm}
+\end{medicion}
+
+\begin{medicion}{M3}{¿La lengüeta queda enrasada?}
+\campo{Qué hacer} Mirá por fuera dónde el chasis (la plataforma horizontal) atraviesa el
+panel lateral. \textbf{Pasá la uña} por encima de la junta, sin medir nada.
+
+\campo{Las tres respuestas posibles}
+\begin{itemize}[leftmargin=1.6em,itemsep=2pt,topsep=3pt]
+\item \textbf{Enrasada} (la uña no salta) $\to$ junta pasante. $W_u = W_{\mathrm{ext}} -
+      6{,}00$, y todo el modelo actual es correcto.
+\item \textbf{Sobresale} $\to$ la lengüeta es más larga que el espesor. $W_u$ sigue
+      siendo el cuerpo del chasis, pero $W_{\mathrm{ext}}$ es mayor y hay que corregir
+      $R_{\mathrm{rov}}$.
+\item \textbf{Hundida} $\to$ la lengüeta no atraviesa del todo. Entonces $W_u$ es
+      \emph{mayor} que $93{,}50$ y el presupuesto mejora.
+\end{itemize}
+
+\campo{Por qué} Esta observación cualitativa, que no requiere ningún instrumento,
+es la que justifica toda la deducción de $W_u$ a partir del archivo de fabricación.
+\anota{enrasada $\square$ \qquad sobresale $\square$ \qquad hundida $\square$}
+\end{medicion}
+
+\section*{Bloque B --- El sesgo escondido}
+\addcontentsline{toc}{section}{Bloque B}
+
+\begin{tcolorbox}[colback=black!5,colframe=black!65,boxrule=0.7pt,arc=1pt]
+\textbf{Por qué este bloque puede ser peor que H-11.} La visión no ve al rover: ve su
+marcador ArUco, y reporta \emph{la posición del marcador}. Si el marcador no está en el
+centro geométrico del rover, cada posición publicada trae un \textbf{sesgo fijo}, y ese
+sesgo se resta directamente del presupuesto lateral.
+
+\smallskip
+Con $4{,}32\ \mathrm{mm}$ de tolerancia y $5\ \mathrm{mm}$ ya gastados en ruido, un
+marcador descentrado $3\ \mathrm{mm}$ no empeora las cosas: las vuelve imposibles
+también para los cubos alineados. Y a diferencia del ruido, un sesgo \textbf{se puede
+corregir en software} en cuanto se conoce el número.
+\end{tcolorbox}
+
+\begin{medicion}{M4}{Descentrado lateral del marcador ArUco}
+\campo{Qué hacer} Con el rover visto desde arriba, medir del \textbf{centro del
+marcador} a la cara exterior del panel izquierdo, y del centro del marcador a la cara
+exterior del panel derecho.
+
+\campo{Qué predice el modelo} Las dos iguales, $W_{\mathrm{ext}}/2 = 49{,}75\ \mathrm{mm}$.
+
+\campo{Qué significa} La mitad de la diferencia entre ambas es el sesgo lateral $b$, y
+el presupuesto real pasa a ser $e_{\max} - \sigma_{\mathrm{vis}} - b$. Cualquier valor
+de $b$ por encima de $1\ \mathrm{mm}$ hay que compensarlo en el cliente.
+\anota{izq $= \rule{2cm}{0.4pt}$ \quad der $= \rule{2cm}{0.4pt}$ \quad $b = \rule{2cm}{0.4pt}$ mm}
+\end{medicion}
+
+\begin{medicion}{M5}{Desplazamiento longitudinal del marcador y altura}
+\campo{Qué hacer} Del centro del marcador a la cara frontal de la placa delantera; y del
+centro del marcador al extremo de las paletas. Aparte: \textbf{altura del marcador sobre
+el piso}.
+
+\campo{Qué predice el modelo} La configuración oficial declara altura
+$= 90\ \mathrm{mm}$, sin confirmar. La distancia longitudinal no está en el modelo y hay
+que medirla.
+
+\campo{Qué significa} La altura entra en la corrección de paralaje
+$\kappa = H/(H-h)$: si el marcador no está a $90\ \mathrm{mm}$, la posición reportada
+tiene un error radial que crece hacia los bordes de la cancha. El desplazamiento
+longitudinal define dónde está realmente el punto de contacto respecto de lo que
+reporta la visión.
+\anota{al frente $= \rule{2cm}{0.4pt}$ \quad a las paletas $= \rule{2cm}{0.4pt}$ \quad altura $= \rule{2cm}{0.4pt}$ mm}
+\end{medicion}
+
+\section*{Bloque C --- Lo que el DXF no podía dar}
+\addcontentsline{toc}{section}{Bloque C}
+
+\begin{medicion}{M6}{Alcance de las paletas $\lambda$}
+\campo{Qué hacer} De la cara frontal de la placa delantera al extremo libre de las
+paletas.
+
+\campo{Qué predice el modelo} Nada: es el único parámetro que quedó sin valor. El modelo
+lo esquiva con una cota, $\varrho_{\mathrm{cont}} \le 89{,}43\ \mathrm{mm}$.
+
+\campo{Qué significa} Fija la distancia de contacto real y con ella el punto de puesta
+$\varrho_{\mathrm{puesta}}$, que hoy vale $129{,}43\ \mathrm{mm}$ por cota. Un $\lambda$
+grande acerca el punto de puesta y abarata cada maniobra.
+\anota{$\lambda = \rule{4cm}{0.4pt}$ mm}
+\end{medicion}
+
+\begin{medicion}{M7}{Ancho \emph{real} máximo, incluyendo ruedas y motores}
+\campo{Qué hacer} Lo más ancho del rover, punta a punta, sea lo que sea que sobresalga:
+ruedas, ejes, tornillos, cables.
+
+\campo{Qué predice el modelo} $W_{\mathrm{ext}} = 99{,}50\ \mathrm{mm}$, \textbf{bajo el
+supuesto de que el chasis es la parte más ancha}.
+
+\campo{Qué significa si es mayor} El radio envolvente $R_{\mathrm{rov}} = 68{,}44$ está
+subestimado, y con él el inflado de obstáculos y la zona de exclusión de borde. Es un
+error del lado peligroso: el planificador creería que pasa por huecos por los que no
+pasa. \textbf{Esta es la medición más probable de refutar al modelo}, porque el archivo
+de fabricación solo tiene las piezas de acrílico, no las ruedas.
+
+\anota{$\rule{4cm}{0.4pt}$ mm \quad ¿qué es lo más ancho? $\rule{3cm}{0.4pt}$}
+\end{medicion}
+
+\begin{medicion}{M8}{Largo real máximo}
+\campo{Qué hacer} Del punto más atrasado al más adelantado, incluyendo el ultrasónico,
+las paletas y lo que sobresalga atrás.
+
+\campo{Qué predice el modelo} El chasis mide $\Lambda = 94{,}00$, pero el largo total es
+mayor: $94{,}00 + \lambda + $ lo que sobresalga atrás.
+
+\campo{Qué significa} Igual que M7: entra en $R_{\mathrm{rov}}$ y en la condición de
+voladizo sobre el precipicio.
+\anota{$\rule{4cm}{0.4pt}$ mm}
+\end{medicion}
+
+\begin{medicion}{M9}{Paralelismo real de las paletas}
+\campo{Qué hacer} Medir la separación entre caras interiores en \textbf{tres puntos}: en
+la boca (extremo libre), a media altura, y en el fondo (contra la placa frontal).
+
+\campo{Qué predice el modelo} Los tres valores iguales, $93{,}50\ \mathrm{mm}$.
+
+\campo{Qué significa}
+\begin{itemize}[leftmargin=1.6em,itemsep=2pt,topsep=3pt]
+\item \textbf{Boca más ancha que el fondo} $\to$ hay algo de embudo. Buena noticia:
+      mejora la captura, y el modelo pasaría a ser conservador en vez de exacto.
+\item \textbf{Boca más angosta} $\to$ las paletas convergen. Mala noticia: el cubo puede
+      entrar y trabarse.
+\item \textbf{Iguales} $\to$ canal paralelo confirmado, el modelo es exacto.
+\end{itemize}
+\anota{boca $= \rule{2cm}{0.4pt}$ \quad medio $= \rule{2cm}{0.4pt}$ \quad fondo $= \rule{2cm}{0.4pt}$ mm}
+\end{medicion}
+
+\begin{medicion}{M10}{Altura de las paletas sobre el piso}
+\campo{Qué hacer} Del piso al borde inferior de la paleta, y del piso al borde superior.
+
+\campo{Qué predice el modelo} Nada: el modelo es plano y no mira alturas.
+
+\campo{Qué significa} Si la paleta empuja por encima de la mitad del cubo
+($30\ \mathrm{mm}$), el empuje genera un momento que tiende a \textbf{volcar} el cubo, y
+la hipótesis H6 del modelo ---contacto plano, el cubo no vuelca--- deja de estar
+garantizada. Si el borde inferior está muy alto, el cubo puede meterse por debajo.
+\anota{inferior $= \rule{2.5cm}{0.4pt}$ \quad superior $= \rule{2.5cm}{0.4pt}$ mm}
+\end{medicion}
+
+\section*{Bloque D --- Los cubos}
+\addcontentsline{toc}{section}{Bloque D}
+
+\begin{medicion}{M11}{Arista real del cubo, medida por amplificación}
+\campo{Qué hacer} Poné los \textbf{tres cubos en fila}, bien pegados, y medí el largo
+total. Dividí por tres.
+
+\campo{Qué predice el modelo} $3 \times 60 = 180{,}00\ \mathrm{mm}$.
+
+\campo{Por qué así} Medir un cubo con regla da $\pm 0{,}5\ \mathrm{mm}$ de error; medir
+tres y dividir da $\pm 0{,}17$. Es el mismo truco que se usó para verificar la escala
+del archivo CAD.
+
+\campo{Qué significa} $L$ entra en todo: en $w_S$, en $e_{\max}$, en el radio del
+corredor. Un cubo de $62$ en vez de $60$ se lleva $1{,}4\ \mathrm{mm}$ más de la
+tolerancia lateral en el peor caso.
+\anota{$3L = \rule{3cm}{0.4pt}$ mm \quad$\Rightarrow$\quad $L = \rule{2cm}{0.4pt}$ mm}
+\end{medicion}
+
+\begin{medicion}{M12}{¿Las aristas del cubo están vivas o redondeadas?}
+\campo{Qué hacer} Mirar y palpar una arista vertical del cubo. Si está redondeada,
+estimar el radio comparándolo con algo conocido.
+
+\campo{Qué predice el modelo} Aristas vivas: el modelo usa un cuadrado perfecto.
+
+\campo{Qué significa} Un redondeo de radio $r$ reduce la anchura proyectada máxima de
+$L\sqrt2$ a aproximadamente $L\sqrt2 - 2r(\sqrt2-1)$, lo que \textbf{devuelve} algo de
+tolerancia: con $r = 2\ \mathrm{mm}$, $e_{\max}$ en el peor caso sube de $4{,}32$ a
+$5{,}15\ \mathrm{mm}$ y el presupuesto deja de ser negativo por poco. También afecta al
+detector de visión, que ajusta una silueta cuadrada.
+\anota{vivas $\square$ \qquad redondeadas, $r \approx \rule{2cm}{0.4pt}$ mm}
+\end{medicion}
+
+\section*{Bloque E --- Para la capa de control (opcional)}
+\addcontentsline{toc}{section}{Bloque E}
+
+\begin{medicion}{M13}{Diámetro de rueda y trocha}
+\campo{Qué hacer} Diámetro exterior de una rueda, y distancia entre los planos medios de
+las dos ruedas (trocha).
+
+\campo{Qué significa} Fuera del alcance del modelo geométrico, pero son los dos números
+que convierten pulsos de encoder en milímetros y grados. Sin ellos, la odometría que
+tiene que cubrir los huecos de oclusión no se puede calibrar. La trocha además fija el
+radio mínimo de giro y con él la velocidad angular real $\omega$, que hoy se supone
+$90\grados/\mathrm{s}$ en el costo de un quiebre.
+\anota{diámetro $= \rule{2.5cm}{0.4pt}$ \quad trocha $= \rule{2.5cm}{0.4pt}$ mm}
+\end{medicion}
+
+\newpage
+\section*{Resumen para llenar de un vistazo}
+\addcontentsline{toc}{section}{Resumen}
+
+\begin{center}
+\small
+\begin{tabular}{clrp{5.2cm}}
+\toprule
+\# & Qué & Predicho & Medido \\
+\midrule
+M1  & Hueco con cubo a $45\grados$ & $8{,}65$ & \\
+M2  & Hueco con cubo alineado & $33{,}50$ & \\
+--- & \emph{control:} M2 $-$ M1 & $24{,}85$ & \\
+M3  & Lengüeta enrasada & sí & \\
+\midrule
+M4  & Marcador: izq / der & $49{,}75$ / $49{,}75$ & \\
+M5  & Marcador: altura & $90$ & \\
+M5  & Marcador: al frente / a paletas & --- & \\
+\midrule
+M6  & Alcance de paletas $\lambda$ & --- & \\
+M7  & Ancho máximo real & $99{,}50$ & \\
+M8  & Largo máximo real & $>94{,}00$ & \\
+M9  & Canal: boca / medio / fondo & $93{,}50$ (los tres) & \\
+M10 & Paletas: alto inferior / superior & --- & \\
+\midrule
+M11 & Tres cubos en fila & $180{,}00$ & \\
+M12 & Aristas vivas & sí & \\
+\midrule
+M13 & Rueda: diámetro / trocha & --- & \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\vspace{0.5cm}
+
+\begin{tcolorbox}[colback=black!5,colframe=black!65,boxrule=0.7pt,arc=1pt]
+\textbf{Si solo podés hacer una medición, hacé M1.} Todo el resto del documento existe
+para refinar; M1 decide si la conclusión central del trabajo se sostiene.
+
+\smallskip
+\textbf{Si podés hacer tres, hacé M1, M2 y M7.} M2 valida a M1, y M7 es la que tiene más
+chance de encontrar un error del lado peligroso.
+\end{tcolorbox}
+
+\vspace{0.4cm}
+
+\noindent
+\footnotesize
+Con los números anotados, el script \texttt{05\_Mediciones\_CAD/recalcular.py} rehace
+todas las magnitudes derivadas y dice si algún resultado del informe cambia:
+
+\begin{center}
+\texttt{python3 recalcular.py --hueco45 8.7 --ancho-max 99.5 --lambda 40}
+\end{center}
+
+\end{document}

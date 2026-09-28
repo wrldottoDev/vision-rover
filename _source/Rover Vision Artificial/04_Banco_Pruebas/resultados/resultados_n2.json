@@ -1,0 +1,101 @@
+[
+ {
+  "id": "N2.1",
+  "titulo": "Reproduccion de la linea base oficial de posicion",
+  "estado": "PASA",
+  "metricas": {
+   "repartidos_inclinada_mm": 1.0549475215830106,
+   "empujando_inclinada_mm": 4.88465523044474,
+   "desvio_rel_cubos_repartidos": 0.004711925317152947,
+   "desvio_rel_rover_EMPUJANDO": 0.00095394066490579
+  },
+  "notas": [
+   "valores documentados: repartidos 1.05 mm, empujando 4.88 mm (camara inclinada)"
+  ],
+  "segundos": 2.416
+ },
+ {
+  "id": "N2.2",
+  "titulo": "Error de ANGULO del detector oficial (sin linea base previa)",
+  "estado": "PASA",
+  "metricas": {
+   "cenital_theta_medio": 0.41944444444444445,
+   "cenital_theta_p95": 1.0,
+   "cenital_theta_max": 1.5,
+   "inclinada_theta_medio": 0.43333333333333335,
+   "inclinada_theta_p95": 1.0,
+   "inclinada_theta_max": 1.5,
+   "err_theta_max_global": 1.5
+  },
+  "notas": [
+   "criterio propuesto: <= 5 grados (limite de la restriccion de interfaz RI2)"
+  ],
+  "segundos": 29.184
+ },
+ {
+  "id": "N2.3",
+  "titulo": "Error de angulo bajo oclusion por empuje",
+  "estado": "PASA",
+  "metricas": {
+   "despejado_pos_max": 0.9005766996548816,
+   "despejado_th_max": 1.0,
+   "despejado_frac_confiable": 1.0,
+   "rover_pos_max": 43.890312636840974,
+   "rover_th_max": 43.5,
+   "rover_frac_confiable": 0.2777777777777778
+  },
+  "notas": [
+   "en oclusion severa NO se exige acertar: se exige declararse no confiable"
+  ],
+  "segundos": 10.659
+ },
+ {
+  "id": "N2.4",
+  "titulo": "Poder discriminante del criterio de confiabilidad",
+  "estado": "PASA",
+  "metricas": {
+   "angulo_falsos_negativos": 20,
+   "angulo_malos_totales": 35,
+   "angulo_tasa_falsos_negativos": 0.5714285714285714,
+   "n_observaciones": 436,
+   "spearman_residuo_posicion": 0.4418967458579876,
+   "spearman_residuo_angulo": 0.4579631871503101,
+   "falsos_negativos": 0,
+   "malos_totales": 11,
+   "tasa_falsos_negativos": 0.0
+  },
+  "notas": [
+   "HALLAZGO H-03: la bandera `confiable` NO protege el ANGULO.",
+   "Su umbral (residuo <= 0.2 celdas) fue calibrado contra el error de",
+   "POSICION. Bajo oclusion por empuje el angulo yerra hasta 19 grados",
+   "y la deteccion se sigue declarando confiable en el 57% de los casos.",
+   "Consecuencia: si algun dia se publica el angulo, NO se puede reutilizar",
+   "esta bandera para filtrarlo; hace falta un umbral propio.",
+   "falso negativo = deteccion con error > 10 mm que se declaro confiable"
+  ],
+  "segundos": 3.032
+ },
+ {
+  "id": "N2.5",
+  "titulo": "Estimadores de la familia B sobre contornos reales",
+  "estado": "INFO",
+  "metricas": {
+   "escenas": 90,
+   "conteo_vertices_base": {
+    "1": 20,
+    "0": 32,
+    "2": 38
+   },
+   "escenas_con_arista": 22,
+   "tasa_extraccion": 0.24444444444444444,
+   "B2_err_medio": 0.3398757004970353,
+   "B2_err_max": 0.8969862984626502,
+   "oficial_err_medio": 0.45555555555555555,
+   "oficial_err_max": 1.5
+  },
+  "notas": [
+   "el eslabon debil de la familia B es la EXTRACCION de vertices, no la formula"
+  ],
+  "segundos": 20.559
+ }
+]

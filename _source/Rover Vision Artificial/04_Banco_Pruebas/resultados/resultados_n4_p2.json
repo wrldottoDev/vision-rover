@@ -1,0 +1,272 @@
+[
+ {
+  "id": "N4.1",
+  "titulo": "Mision nominal sin perturbacion",
+  "estado": "PASA",
+  "metricas": {
+   "1r_entregados": 3,
+   "1r_tiempo_s": 33.4,
+   "1r_colisiones": 0,
+   "1r_salidas": 0,
+   "2r_entregados": 3,
+   "2r_tiempo_s": 21.7,
+   "2r_colisiones": 0,
+   "2r_salidas": 0
+  },
+  "notas": [],
+  "segundos": 2.32
+ },
+ {
+  "id": "N4.2",
+  "titulo": "Mision con perturbacion nominal (200 semillas)",
+  "estado": "PASA",
+  "metricas": {
+   "1r_tasa": 0.985,
+   "1r_t_p50": 43.62499999999966,
+   "1r_t_p90": 48.41999999999938,
+   "1r_colis_medias": 0.0,
+   "1r_corridas_sin_colision": 1.0,
+   "2r_tasa": 0.965,
+   "2r_t_p50": 28.37500000000027,
+   "2r_t_p90": 32.56500000000029,
+   "2r_colis_medias": 0.24,
+   "2r_corridas_sin_colision": 0.945
+  },
+  "notas": [
+   "HALLAZGO H-07: con dos rovers la entrega se mantiene pero aparecen colisiones.",
+   "La regla de cesion por pares (unica coordinacion implementada) NO alcanza.",
+   "Es coherente con N3.8: el 46%% de los pares de corredores interfiere.",
+   "La capa de coordinacion multi-agente esta FUERA del alcance del modelo,",
+   "y esta prueba mide exactamente cuanto cuesta esa ausencia."
+  ],
+  "segundos": 723.716
+ },
+ {
+  "id": "N4.3",
+  "titulo": "Barrido de ruido posicional hasta el punto de ruptura",
+  "estado": "INFO",
+  "metricas": {
+   "curva": [
+    [
+     0.0,
+     1.0
+    ],
+    [
+     0.05,
+     0.95
+    ],
+    [
+     0.1,
+     0.95
+    ],
+    [
+     0.2,
+     0.8
+    ],
+    [
+     0.3,
+     0.7
+    ],
+    [
+     0.4,
+     0.575
+    ],
+    [
+     0.5,
+     0.425
+    ],
+    [
+     0.7,
+     0.15
+    ],
+    [
+     1.0,
+     0.025
+    ]
+   ],
+   "punto_ruptura_celdas": 0.5,
+   "punto_ruptura_mm": 10.0,
+   "presupuesto_modelo_mm": 12.57
+  },
+  "notas": [
+   "barrido con UN rover, para aislar el modelo de la coordinacion ausente.",
+   "el modelo predice un presupuesto lateral de control de 12.57 mm.",
+   "la ruptura medida ocurre a sigma = 10.0 mm (0.8x el presupuesto)."
+  ],
+  "segundos": 1232.844
+ },
+ {
+  "id": "N4.4",
+  "titulo": "Barrido de latencia, con y sin la regla de corte RI4",
+  "estado": "INFO",
+  "metricas": {
+   "tabla": [
+    [
+     0,
+     0.8333333333333334,
+     0.8333333333333334,
+     0
+    ],
+    [
+     50,
+     1.0,
+     1.0,
+     0
+    ],
+    [
+     100,
+     0.0,
+     0.0,
+     0
+    ],
+    [
+     200,
+     0.0,
+     0.0,
+     0
+    ],
+    [
+     400,
+     0.0,
+     0.0,
+     0
+    ],
+    [
+     800,
+     0.0,
+     0.0,
+     14220
+    ],
+    [
+     1600,
+     0.0,
+     0.0,
+     14028
+    ]
+   ],
+   "tasa_con_corte_lat_alta": 0.0,
+   "tasa_sin_corte_lat_alta": 0.0,
+   "tasa_con_corte_lat_baja": 0.45833333333333337,
+   "tasa_sin_corte_lat_baja": 0.45833333333333337
+  },
+  "notas": [],
+  "segundos": 276.449
+ },
+ {
+  "id": "N4.5",
+  "titulo": "Escenarios adversarios",
+  "estado": "PASA",
+  "metricas": {
+   "(a)_irrecuperables": [
+    "green"
+   ],
+   "(a)_entregados": 0,
+   "(a)_dist_min": 54.45,
+   "(b)_irrecuperables": [],
+   "(b)_entregados": 1,
+   "(b)_dist_min": 0.93,
+   "(c)_irrecuperables": [],
+   "(c)_entregados": 2,
+   "(c)_dist_min": 0.85,
+   "(d)_irrecuperables": [
+    "blue"
+   ],
+   "(d)_entregados": 0,
+   "(d)_dist_min": 1.03,
+   "(e)_irrecuperables": [
+    "blue",
+    "green"
+   ],
+   "(e)_entregados": 0,
+   "(e)_dist_min": 35.35,
+   "(f)_irrecuperables": [
+    "green"
+   ],
+   "(f)_entregados": 0,
+   "(f)_dist_min": 53.74,
+   "bloqueos": 4,
+   "colisiones": 7,
+   "salidas": 0
+  },
+  "notas": [
+   "(a) y (f) colocan el cubo en la ZONA TRAMPA (hallazgo H-09): no existe",
+   "secuencia de empujes que lo saque. El planificador lo detecta y lo abandona,",
+   "que es la conducta correcta: no gasta la ronda empujando contra una pared.",
+   "(e) exhibe colisiones, que es el hallazgo H-07 (falta coordinacion)."
+  ],
+  "segundos": 13.162
+ },
+ {
+  "id": "N4.6",
+  "titulo": "Oclusion prolongada durante el transporte",
+  "estado": "PASA",
+  "metricas": {
+   "muestras_empuje": 120,
+   "oclusion_media": 0.05701666666666667,
+   "oclusion_max": 0.24,
+   "age_max_ms": 0.0,
+   "frac_age_mayor_200": 0.0,
+   "lateral_medio_mm": 4.173298194806766,
+   "lateral_max_mm": 10.437840898356916,
+   "entregado": 1
+  },
+  "notas": [
+   "el simulador oficial NO puede producir este escenario (hallazgo H-01b):",
+   "su radio de oclusion es 2 celdas y el contacto real ocurre a 5-5.6 celdas."
+  ],
+  "segundos": 0.213
+ },
+ {
+  "id": "N4.7",
+  "titulo": "Rotacion del cubo inducida por el empuje descentrado",
+  "estado": "INFO",
+  "metricas": {
+   "tabla": [
+    [
+     0.0,
+     1.3500311979441904e-13,
+     0.0,
+     300.40000000000214
+    ],
+    [
+     2.0,
+     32.502449137161435,
+     0.0,
+     301.05647231683076
+    ],
+    [
+     5.0,
+     36.55796984568978,
+     0.0,
+     300.424285432524
+    ],
+    [
+     10.0,
+     17.980195817959896,
+     0.0,
+     301.57215585368385
+    ],
+    [
+     15.0,
+     19.379126206941095,
+     0.0,
+     300.6300830201536
+    ]
+   ],
+   "deriva_ang_e0": 1.3500311979441904e-13,
+   "deriva_ang_e15": 19.379126206941095,
+   "monotona_en_e": false,
+   "simetria_e0": true
+  },
+  "notas": [
+   "SOLO ES VALIDO EL CASO e=0: la simetria da deriva nula a 1.7e-13 grados.",
+   "Los valores para e distinto de cero NO son cuantitativamente confiables:",
+   "el modelo de centro instantaneo cuasiestatico con r_g^2 = L^2/6 resulta",
+   "no monotono en e y no produce deriva lateral, que fisicamente deberia haber.",
+   "LIMITE DEL ALCANCE: aqui termina la geometria y empieza la mecanica del",
+   "contacto (cono de friccion, regla de Mason), que el modelo excluyo.",
+   "Para cuantificar la rotacion inducida hace falta un modelo de friccion."
+  ],
+  "segundos": 0.489
+ }
+]
