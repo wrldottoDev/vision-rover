@@ -145,17 +145,26 @@ STOP = WheelCommand(0.0, 0.0)
 class SegKind(enum.Enum):
     ROTATE = "ROTATE"
     STRAIGHT = "STRAIGHT"     # forward if end is ahead, reverse otherwise (see `reverse`)
+    ARC = "ARC"               # constant-curvature motion from start to end (see `curvature`, `reverse`)
 
 
 @dataclass(frozen=True)
 class Segment:
+    """One motion primitive.  STRAIGHT: start/end collinear with the heading.  ROTATE: in place.
+    ARC: constant signed curvature `curvature` (1/mm, + = turning left/CCW w.r.t. the direction of travel);
+    the heading changes by curvature * arc_length; `reverse` = driven backwards."""
     kind: SegKind
     start: Pose
     end: Pose
     reverse: bool = False
+    curvature: float = 0.0
 
     @property
     def length(self) -> float:
+        """Path length of the rotation centre (chord for STRAIGHT, arc length for ARC, 0 for ROTATE)."""
+        if self.kind is SegKind.ARC and abs(self.curvature) > 1e-12:
+            from .frames import angle_diff
+            return abs(angle_diff(self.end.theta, self.start.theta) / self.curvature)
         return math.hypot(self.end.x - self.start.x, self.end.y - self.start.y)
 
 
