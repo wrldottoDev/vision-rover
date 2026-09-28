@@ -56,7 +56,7 @@ def truth_delivered(world, depots: dict[str, DepotZone], cfg: Config) -> dict[st
 
 
 def run_scenario(sc: SC.Scenario, cfg: Config = DEFAULT, max_time: float = 300.0,
-                 stall_s: float = 90.0, record: list | None = None) -> RunResult:
+                 stall_s: float = 300.0, record: list | None = None) -> RunResult:
     world, emu = SC.instantiate(sc, cfg)
     from ..coordination.supervisor import SupervisorParams
     # deterministic planning in simulation: expansion caps, not wall clock, bound the planners
