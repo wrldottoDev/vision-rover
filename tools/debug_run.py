@@ -16,7 +16,7 @@ orig = SUP.Supervisor.__init__
 def init(self, *a, **k):
     orig(self, *a, **k); captured['s'] = self
 SUP.Supervisor.__init__ = init
-r = run_scenario(sc, max_time=mt)
+r = run_scenario(sc, max_time=mt, stall_s=float(__import__("os").environ.get("STALL", 90)))
 s = captured['s']
 skip = set(sys.argv[4].split(',')) if len(sys.argv) > 4 else {'estop'}
 last = None

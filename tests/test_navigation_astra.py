@@ -389,7 +389,13 @@ def test_supervisor_revalidation_preserves_planning_contract(case):
     path = Path([Segment(SegKind.STRAIGHT, start, end)], 1)
     supervisor._cube_obstacles = lambda *a, **k: obstacles   # (lead: signature gained exclude/target kwargs)
     all_obstacles = obstacles + supervisor._other_region(1)
-    assert first_collision(path, all_obstacles, C.margins.pose_uncertainty, C.margins.board) is not None
+    # Lead amendment (DECISIONS #5/#14): the board contract is "true footprint >= margins.board"; the supervisor's
+    # navigation therefore uses board margin (board - pose_uncertainty) on top of the pose_uncertainty inflation.
+    bm = C.margins.board - C.margins.pose_uncertainty
+    if case == "board_margin":
+        start, end = Pose(57, 65, 0), Pose(200, 65, 0)        # rear at x = 10 mm < 12 mm: violates the contract
+        path = Path([Segment(SegKind.STRAIGHT, start, end)], 1)
+    assert first_collision(path, all_obstacles, C.margins.pose_uncertainty, bm) is not None
     assert not supervisor.path_still_clear(1, path, 0), f"revalidation dropped {case}"
 
 
