@@ -45,6 +45,8 @@ class PushParams:
     # Require a rotate-in-place + straight approach to every pre-push pose (navigation has no arcs yet).  OFF: with
     # it, single-cube coverage drops from ~65 % to 5-29 % (tools/solvability_map.py); arcs in navigation are the fix.
     require_straight_approach: bool = False
+    # Heading room for alignment corrections at a pre-push pose (see _prepush_ok).  TUNED.
+    align_room_rad: float = math.radians(6.0)
 
     # ASSUMED: minimum push distance for the cube to travel far enough to square flush against the
     # plate (rather than just kiss it).  Shorter "legs" are rejected as not physically meaningful.
@@ -271,9 +273,12 @@ def _prepush_ok(cfg: Config, fp: Footprint, pose: Pose, target_xy: tuple[float, 
     m = cfg.margins.board + extra_margin
     lo_x, hi_x = m, board_w - m
     lo_y, hi_y = m, board_h - m
-    env = fp.envelope(pose.x, pose.y, pose.theta)
-    if not S.inside_rect(env, lo_x, hi_x, lo_y, hi_y):
-        return False
+    # ALIGN needs small in-place heading corrections at this pose: require the envelope inside the field for
+    # heading errors up to +-align_room (lead, closed-loop finding: alignment blocked by the board guard).
+    for dth in (0.0, -DEFAULT_PARAMS.align_room_rad, DEFAULT_PARAMS.align_room_rad):
+        env = fp.envelope(pose.x, pose.y, pose.theta + dth)
+        if not S.inside_rect(env, lo_x, hi_x, lo_y, hi_y):
+            return False
     r = fp.sweep_radius
     thresh = r + cfg.cube.half_diag + cfg.margins.cube_nav
     if math.hypot(pose.x - target_xy[0], pose.y - target_xy[1]) < thresh - 1e-6:

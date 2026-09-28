@@ -93,6 +93,7 @@ class DepotConfig:
     delivery_margin: float = 3.0             # TUNED: 6 mm left a 2.25 mm feasible band along edges
     # Consecutive stationary frames that must satisfy the criterion before declaring delivery.
     confirm_frames: int = 6
+    confirm_margin: float = 1.0              # mm, placement confirmation with the NOMINAL orientation (DECISIONS #17)
 
 
 @dataclass(frozen=True)

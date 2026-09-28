@@ -63,6 +63,7 @@ class SupervisorParams:
     clock_window_s: float = 20.0
     guard_lookahead_s: float = 0.35
     guard_brake_mm: float = 12.0
+    guard_rot_lookahead_s: float = 0.30     # worst command latency (0.1 s) + motor lag (0.2 s) at stop
     lost_rover_growth: float = 60.0          # mm added to a lost rover's reservation disc
     mission_min_cubes: int = 2
     parking_candidates: int = 20
@@ -380,7 +381,7 @@ class Supervisor:
         cands = [lo, hi] + [k * math.pi / 4 for k in range(-8, 9) if lo <= k * math.pi / 4 <= hi]
         return max(cube_half_extent(side, a) for a in cands)
 
-    def is_delivered(self, color: str, since: float, t: float) -> bool:
+    def is_delivered(self, color: str, since: float, t: float, nominal_alpha: float | None = None) -> bool:
         """ENGINEERING placement confirmation under the ASSUMED depot model (config.depot); not an official
         verdict.  Needs n distinct, fresh, stationary captures after `since`, whole footprint (worst case over
         the orientation belief) inside the zone."""
@@ -388,12 +389,21 @@ class Supervisor:
         a = self._confirm_frames(color, since, t)
         if depot is None or a is None:
             return False
-        h = self._worst_half(color)
         x0, x1, y0, y1 = depot.bounds
         # judge the MEAN of the stationary window (per-frame noise would reject a correctly placed cube)
         mx, my = float(a[:, 0].mean()), float(a[:, 1].mean())
-        self.last_confirm_diag.update(half=round(h, 1))
-        return bool(mx - h >= x0 and mx + h <= x1 and my - h >= y0 and my + h <= y1)
+        # Nominal orientation: belief mean, else the heading of the last flush push (passed by the FSM).  The
+        # worst case over the belief is only reported: with a 100 mm depot (ASSUMED) and 100 mm-wide rovers along
+        # the edges, placements are within a few mm of the boundary and a re-push is usually impossible.
+        c = self.cube(color)
+        alpha = c.alpha if (c is not None and c.alpha is not None) else nominal_alpha
+        h_nom = cube_half_extent(self.cfg.cube.side, alpha) if alpha is not None else cube_half_extent(self.cfg.cube.side, None)
+        h_worst = self._worst_half(color)
+        m = self.cfg.depot.confirm_margin
+        inside = lambda h: mx - h >= x0 + m and mx + h <= x1 - m and my - h >= y0 + m and my + h <= y1 - m
+        self.last_confirm_diag.update(half_nominal=round(h_nom, 1), half_worst=round(h_worst, 1),
+                                      marginal=not inside(h_worst))
+        return bool(inside(h_nom))
 
     def on_delivered(self, rid: int, color: str, t: float) -> None:
         self.delivered.add(color)
@@ -575,9 +585,10 @@ class Supervisor:
             polys = []
             for k in range(1, 6):
                 s = h * k / 5
-                th = e.pose.theta + w * s
-                x = e.pose.x + vv * s * math.cos(e.pose.theta + w * s / 2)
-                y = e.pose.y + vv * s * math.sin(e.pose.theta + w * s / 2)
+                sw = min(s, self.p.guard_rot_lookahead_s)   # rotation stops quickly (latency + braking)
+                th = e.pose.theta + w * sw
+                x = e.pose.x + vv * s * math.cos(e.pose.theta + w * sw / 2)
+                y = e.pose.y + vv * s * math.sin(e.pose.theta + w * sw / 2)
                 polys.append(self.fp.envelope(x, y, th))
             why = None
             now_env = self.fp.envelope(e.pose.x, e.pose.y, e.pose.theta)

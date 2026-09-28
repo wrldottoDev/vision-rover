@@ -711,7 +711,9 @@ class RoverAgent:
         """Post-retreat confirmation that the cube is still (completely) in the depot."""
         if self.dwell(t) < self.p.verify_s:
             return 0.0, 0.0
-        if ctx.is_delivered(self.task.color, self.t_enter, t):
+        if ctx.is_delivered(self.task.color, self.t_enter, t, nominal_alpha=wrap4(self.task.plan.legs[-1].heading)):
+            if getattr(ctx, "last_confirm_diag", {}).get("marginal"):
+                ctx.log(self.id, "delivery_marginal", **ctx.last_confirm_diag)
             ctx.on_delivered(self.id, self.task.color, t)
             ctx.release_task(self.id, self.task.color, failed=False, t=t)
             self.task = None

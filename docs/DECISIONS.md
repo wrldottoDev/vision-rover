@@ -35,3 +35,10 @@ Format: decision — why — evidence — status.
     estimator models the intended twist; feed-forward only compensates the hardware. ACTIVE.
 16. **Arc motion primitives required**: without them edge-parallel pre-push poses are unreachable (coverage 65 % ->
     5-29 % when reachability is enforced). Delegated to Luna lane C; reachability check kept as an option. IN PROGRESS.
+17. **Delivery confirmation uses the nominal orientation** (belief mean, else last flush-push heading) with a 1 mm
+    margin; the worst case over the belief is logged as "marginal". Reason: with the ASSUMED 100 mm depot and 100 mm
+    rovers along edges, correct placements sit within a few mm of the boundary (seed 0: truth-delivered cubes were
+    rejected by the worst-case rule). Confirmation is an engineering decision (whether to re-push), not an official
+    verdict. ACTIVE.
+18. **Pre-push poses must allow +-6 deg alignment rotations inside the field** and the board guard keeps a 0.3 s
+    rotational lookahead (a 0.15 s lookahead produced a real board exit). ACTIVE.
