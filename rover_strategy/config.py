@@ -190,6 +190,16 @@ class Config:
     estimator: EstimatorConfig = field(default_factory=EstimatorConfig)
     planner: PlannerConfig = field(default_factory=PlannerConfig)
 
+    def planning(self) -> "Config":
+        """Config as seen by planners and guards: board margins reduced by the allowed overhang beyond the effective
+        field (board.overhang_allowance_mm, default 0 = strict).  Physics counts exits with the same allowance."""
+        a = self.board.overhang_allowance_mm
+        if a == 0.0:
+            return self
+        from dataclasses import replace
+        return replace(self, margins=replace(self.margins, board=self.margins.board - a,
+                                              board_final_leg=self.margins.board_final_leg - a))
+
     @property
     def prepush_distance(self) -> float:
         """Rotation-centre to cube-centre distance at the pre-push pose.

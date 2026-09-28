@@ -26,7 +26,8 @@ _Last updated: 2026-09-28 by Claude Opus 5.5 (lead/final auditor)._
 
 ## Open questions for the team / organisers (cannot be resolved from the repo)
 - Official depot size and delivery criterion; depot positions vs corner markers (marker freeze risk).
-- Does leaving the 860 mm effective field (but staying on the 1000 mm board) count as "salida"?
+- Does leaving the 860 mm effective field (but staying on the 1000 mm board) count as "salida"? **Decisive**:
+  20 mm of allowed overhang raises single-cube coverage from ~30-54 % to ~63-66 % (PROJECT_CONTEXT 1b).
 - Protocol v2 schema; real latency logs; whether marker offset is compensated by the deployed vision.
 - Duration of the motor-distance experiments (to convert to mm/s).
 

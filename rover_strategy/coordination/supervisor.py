@@ -67,6 +67,10 @@ class SupervisorParams:
     lost_rover_growth: float = 60.0          # mm added to a lost rover's reservation disc
     mission_min_cubes: int = 2
     parking_candidates: int = 20
+    # Wall-clock planning budgets (live use).  The simulator sets them high so the deterministic expansion caps
+    # bound planning instead: otherwise results depend on CPU load and failing seeds are not reproducible.
+    nav_deadline_s: float = 1.5
+    push_deadline_s: float = 0.3
 
 
 def _min_sep(fp: Footprint, A: list[RoverEstimate], B: list[RoverEstimate], horizon: float) -> float:
@@ -85,7 +89,9 @@ def _min_sep(fp: Footprint, A: list[RoverEstimate], B: list[RoverEstimate], hori
 
 class Supervisor:
     def __init__(self, rover_ids: list[int], cfg: Config = DEFAULT, params: SupervisorParams | None = None):
+        cfg = cfg.planning()                      # board margins net of the allowed overhang (default: strict)
         self.cfg = cfg
+        self.overhang = cfg.board.overhang_allowance_mm
         self.p = params or SupervisorParams()
         self.ids = sorted(rover_ids)
         self.fp = Footprint(cfg.rover)
@@ -218,9 +224,10 @@ class Supervisor:
                 out.append(PolyObstacle(_inflate(q, pad)))
         return out
 
-    def plan_nav(self, rid: int, goal: Pose, ignore_other: bool = False, deadline_s: float = 1.5):
+    def plan_nav(self, rid: int, goal: Pose, ignore_other: bool = False, deadline_s: float | None = None):
         """ponytail: planning runs synchronously inside tick(); fine in simulation (sim time is frozen while we
         compute) but a real deployment must run it in a worker thread and re-check freshness before commanding."""
+        deadline_s = self.p.nav_deadline_s if deadline_s is None else deadline_s
         start = self.est[rid].estimate(self.t).pose
         task = self.agents[rid].task
         cubes = self._cube_obstacles(target=task.color if task else None)
@@ -245,7 +252,8 @@ class Supervisor:
         depot = self.depots.get(color)
         if cube is None or depot is None:
             return None
-        plans = self.pusher.plan(cube, depot, self._cube_list(color), self.board_w, self.board_h, max_plans=3)
+        plans = self.pusher.plan(cube, depot, self._cube_list(color), self.board_w, self.board_h, max_plans=3,
+                                 deadline_s=self.p.push_deadline_s)
         if not plans:
             self.log(rid, "push_plan_fail", color=color, why=self.pusher.last_failure)
             return None
@@ -350,7 +358,8 @@ class Supervisor:
 
     def retreat_clear(self, rid: int, pose: Pose, dist: float, target: str | None) -> bool:
         sweep = self.fp.straight_sweep(pose.x, pose.y, pose.theta, -dist)
-        if not shapes.inside_rect(sweep, 0.0, self.board_w, 0.0, self.board_h):
+        e0 = -self.overhang
+        if not shapes.inside_rect(sweep, e0, self.board_w - e0, e0, self.board_h - e0):
             return False
         for c in self._cube_obstacles(exclude=target):
             if shapes.disc_distance(sweep, (c.x, c.y), c.r - self.cfg.margins.cube_nav) <= 0.0:
@@ -537,7 +546,7 @@ class Supervisor:
         plans = {}
         for c in free:
             ps = self.pusher.plan(self.cube(c), self.depots[c], self._cube_list(c), self.board_w, self.board_h,
-                                  max_plans=3)
+                                  max_plans=3, deadline_s=self.p.push_deadline_s)
             if ps:
                 plans[c] = ps
             else:
@@ -592,8 +601,9 @@ class Supervisor:
                 polys.append(self.fp.envelope(x, y, th))
             why = None
             now_env = self.fp.envelope(e.pose.x, e.pose.y, e.pose.theta)
-            now_in = shapes.inside_rect(now_env, 0.0, self.board_w, 0.0, self.board_h)
-            if now_in and not all(shapes.inside_rect(p, 0.0, self.board_w, 0.0, self.board_h) for p in polys):
+            e0 = -self.overhang
+            now_in = shapes.inside_rect(now_env, e0, self.board_w - e0, e0, self.board_h - e0)
+            if now_in and not all(shapes.inside_rect(p, e0, self.board_w - e0, e0, self.board_h - e0) for p in polys):
                 why = "board"
             elif self._conflict(rid, polys):
                 why = "reservation"
@@ -733,6 +743,7 @@ class Supervisor:
         keeper_obs = [PolyObstacle(p) for p in region]
         for _, x, y, th in cands[:self.p.parking_candidates]:
             goal = Pose(float(x), float(y), th)
-            if self.nav.plan(me, goal, cubes + keeper_obs, self.board_w, self.board_h, deadline_s=0.15) is not None:
+            if self.nav.plan(me, goal, cubes + keeper_obs, self.board_w, self.board_h,
+                             deadline_s=min(0.15 * self.p.nav_deadline_s / 1.5, 5.0)) is not None:
                 return goal
         return None

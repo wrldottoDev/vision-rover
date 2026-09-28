@@ -58,7 +58,9 @@ def truth_delivered(world, depots: dict[str, DepotZone], cfg: Config) -> dict[st
 def run_scenario(sc: SC.Scenario, cfg: Config = DEFAULT, max_time: float = 300.0,
                  stall_s: float = 90.0, record: list | None = None) -> RunResult:
     world, emu = SC.instantiate(sc, cfg)
-    sup = Supervisor(list(world.rovers), cfg)
+    from ..coordination.supervisor import SupervisorParams
+    # deterministic planning in simulation: expansion caps, not wall clock, bound the planners
+    sup = Supervisor(list(world.rovers), cfg, SupervisorParams(nav_deadline_s=30.0, push_deadline_s=3.0))
     grid_rows = sc.board_rows
     depots = {}
     for color, (col, row) in sc.depots.items():

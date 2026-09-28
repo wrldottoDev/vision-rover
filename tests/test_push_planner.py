@@ -132,7 +132,7 @@ def test_edge_hugging_cube_needs_multi_leg():
     # depot is east -> no plan.  Physics of pushing without walls, not a planner weakness.
     assert not planner.plan(CubeEstimate("red", 75.0, 430.0), depot, [], BOARD, BOARD)
     cube = CubeEstimate("red", 260.0, 200.0)    # far enough from the edges to be re-routed
-    plans = planner.plan(cube, depot, [], BOARD, BOARD, max_plans=5, deadline_s=0.3)
+    plans = planner.plan(cube, depot, [], BOARD, BOARD, max_plans=5, deadline_s=3.0)
     assert plans, planner.last_failure
     assert all(len(p.legs) >= 1 for p in plans)
     for p in plans:

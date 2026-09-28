@@ -4,7 +4,11 @@ from rover_strategy.planning.push_planner import PushPlanner
 from rover_strategy.world import CubeEstimate
 from rover_strategy.geometry.zones import DepotZone
 step = float(sys.argv[1]) if len(sys.argv) > 1 else 40
-pp = PushPlanner()
+import os
+from dataclasses import replace
+from rover_strategy.config import DEFAULT
+_cfg = replace(DEFAULT, board=replace(DEFAULT.board, overhang_allowance_mm=float(os.environ.get("OVERHANG", 0))))
+pp = PushPlanner(_cfg.planning())
 for name, (dx, dy) in {"top-right": (810, 810), "bottom-left": (50, 50), "bottom-right": (810, 50)}.items():
     dep = DepotZone("red", dx, dy, 50)
     tot = ok = 0; legs = {}

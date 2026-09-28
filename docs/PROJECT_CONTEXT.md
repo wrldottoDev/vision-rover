@@ -50,6 +50,12 @@ executor logic that will later move to the rovers. Phase 9 (embedded split) must
 1. **Edge lock** (physics of pushing without walls): the rover must be behind the cube; a cube closer than ~230 mm to
    an edge can only be pushed along that edge. Single-cube solvable fraction of the field (strict "stay inside the
    860 mm field"): ~65 %; if 70 mm of the physical board margin may be used: ~85 % (`tools/solvability_map.py`).
+1b. **Overhang sensitivity (2026-09-28, planner coverage, 40 mm grid, single cube)**: allowing the rover footprint to
+   exceed the 860 mm effective field by 0 / 20 / 40 mm (still on the 1000 mm board) gives ~30-54 % / 63-66 % /
+   72-74 % solvable positions, and turns most plans from 2-leg L-shapes into 1-leg direct pushes. Even with arc
+   motions, edge-parallel pre-push poses within ~1 mm of the strict limit are geometrically unreachable (any heading
+   deviation phi swings the paddle corners out by ~102 sin(phi) mm). **The organisers' definition of "leaving the
+   surface" is the single most important open rule question.** Knob: `config.board.overhang_allowance_mm`.
 2. **Corner-depot squeeze**: pushing along an edge into a corner depot, rover half-width + board margin vs the 100 mm
    depot leaves a ~2 mm feasible band with 12 mm margins; we use 5 mm on the final leg (~11 mm band).
 3. **Marker occlusion**: a delivered cube at the depot point overlaps the corner ArUco; two occluded corners freeze
