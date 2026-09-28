@@ -720,6 +720,9 @@ class RoverAgent:
             self._go(S.IDLE, t, ctx, "delivered")
         elif self.dwell(t) > self.p.verify_timeout_s:
             ctx.log(self.id, "delivery_check_failed", **getattr(ctx, "last_confirm_diag", {}))
+            # The cube has not been touched since the flush push ended: keep that orientation belief so a short
+            # corrective push can be planned (the tracker may have reset it on occlusion noise).
+            ctx.set_cube_orientation(self.task.color, wrap4(self.task.plan.legs[-1].heading), self.p.flush_alpha_std)
             if not self._charge(1.0, t, ctx, "delivery not confirmed after retreat"):
                 self._replan(t, ctx)
         return 0.0, 0.0

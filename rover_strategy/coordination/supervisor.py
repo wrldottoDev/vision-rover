@@ -390,7 +390,7 @@ class Supervisor:
         self.last_confirm_diag.update(spread=(round(float(np.ptp(a[:, 0])), 1), round(float(np.ptp(a[:, 1])), 1)),
                                       mean=(round(float(a[:, 0].mean()), 1), round(float(a[:, 1].mean()), 1)))
         # stationarity: allow ~3 sigma of per-frame cube noise (partially occluded cubes are noisier)
-        if np.ptp(a[:, 0]) > 10.0 or np.ptp(a[:, 1]) > 10.0:
+        if np.ptp(a[:, 0]) > 15.0 or np.ptp(a[:, 1]) > 15.0:   # partial occlusion adds ~10 mm spread (seed 104)
             return None
         return a
 
