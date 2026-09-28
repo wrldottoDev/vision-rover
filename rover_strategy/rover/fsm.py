@@ -528,8 +528,15 @@ class RoverAgent:
         h = min(max(depth, c.half), c.half_diag)
         return abs(lat) + h <= g.inner_half_width + self.p.contact_tol
 
-    def _infer_orientation(self, depth: float, heading: float, ctx) -> None:
-        if depth <= self.cfg.cube.half + self.p.flush_tol:
+    def _infer_orientation(self, depth: float, heading: float, ctx, pushed_mm: float = 0.0) -> None:
+        """Orientation from contact depth (cube-centre distance ahead of the plate): 30 mm flush vs 42.4 mm at 45 deg.
+        Measured depths of flush cubes in closed loop span ~26-37 mm (unknown marker offset biases them), so:
+        depth <= 36 after a real push (>= 60 mm of flat-plate pushing, which squares the cube) -> strong flush
+        evidence (std 6 deg); depth <= 39 -> flush but less certain (std 10 deg); otherwise unknown."""
+        half = self.cfg.cube.half
+        if depth <= half + 6.0 and pushed_mm >= 60.0:
+            ctx.set_cube_orientation(self.task.color, wrap4(heading), math.radians(6.0))
+        elif depth <= half + 9.0:
             ctx.set_cube_orientation(self.task.color, wrap4(heading), self.p.flush_alpha_std)
         else:
             ctx.set_cube_orientation(self.task.color, None, math.pi / 4)
@@ -575,6 +582,7 @@ class RoverAgent:
         self.pusher.reset((float(p0[0]), float(p0[1])), (float(p1[0]), float(p1[1])))
         self.push_budget = self.p.push_timeout_factor * (np.linalg.norm(p1 - p0) / self.cfg.limits.v_push) + 6.0
         self.last_seen_push = t
+        self.push_start_xy = est.pose.xy()
         ctx.set_cube_pushed(self.task.color, True)
         self._go(S.PUSH, t, ctx)
         return 0.0, 0.0
@@ -617,12 +625,16 @@ class RoverAgent:
         if m is None and self.dwell(t) < self.p.verify_timeout_s:
             return 0.0, 0.0
         if m is not None and self._fits_channel(m[0], m[1]):
-            self._infer_orientation(m[0], est.pose.theta, ctx)
+            pushed = float(np.linalg.norm(est.pose.xy() - self.push_start_xy)) if getattr(self, "push_start_xy", None) is not None else 0.0
+            self._infer_orientation(m[0], est.pose.theta, ctx, pushed)
         else:
             ctx.set_cube_orientation(self.task.color, None, math.pi / 4)
         final = self.task.leg == len(self.task.plan.legs) - 1
         if final:
-            self._go(S.VERIFY_DELIVERY, t, ctx)
+            # Verify delivery only with a clear view: while the rover presses the cube into a corner its body
+            # partly covers the cube and the published position is noisy/biased (closed-loop finding: 27 mm
+            # spread).  Retreat straight, then CONFIRM; a miss is handled by replanning from the observed state.
+            self._begin_retreat(t, ctx, "delivered")
         else:
             self._begin_retreat(t, ctx, "next_leg")
         return 0.0, 0.0
@@ -636,6 +648,7 @@ class RoverAgent:
         if self.dwell(t) < self.p.verify_timeout_s:
             return 0.0, 0.0
         self.task.delivery_attempts += 1
+        ctx.log(self.id, "delivery_check_failed", **getattr(ctx, "last_confirm_diag", {}))
         obs = ctx.fresh_cube(self.task.color, t - 0.6)
         if obs is not None and self.task.delivery_attempts <= self.p.delivery_retries:
             dp = np.array(self.task.plan.delivery_point) - obs[0]
@@ -704,6 +717,7 @@ class RoverAgent:
             self.task = None
             self._go(S.IDLE, t, ctx, "delivered")
         elif self.dwell(t) > self.p.verify_timeout_s:
-            if not self._charge(1.0, t, ctx, "delivery lost after retreat"):
+            ctx.log(self.id, "delivery_check_failed", **getattr(ctx, "last_confirm_diag", {}))
+            if not self._charge(1.0, t, ctx, "delivery not confirmed after retreat"):
                 self._replan(t, ctx)
         return 0.0, 0.0

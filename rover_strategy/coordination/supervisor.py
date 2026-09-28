@@ -359,11 +359,15 @@ class Supervisor:
     def _confirm_frames(self, color: str, since: float, t: float):
         q = [(tc, x, y) for (tc, x, y) in self.fresh.get(color, ()) if tc >= since]
         n = self.cfg.depot.confirm_frames
-        if len(q) < n or t - q[-1][0] > 0.25:
+        self.last_confirm_diag = {"n": len(q), "newest_age": round(t - q[-1][0], 3) if q else None}
+        if len(q) < n or t - q[-1][0] > self.cfg.telemetry.cube_fresh_s:
             return None
         q = q[-n:]
         a = np.array([(x, y) for _, x, y in q])
-        if np.ptp(a[:, 0]) > 4.0 or np.ptp(a[:, 1]) > 4.0:     # not stationary
+        self.last_confirm_diag.update(spread=(round(float(np.ptp(a[:, 0])), 1), round(float(np.ptp(a[:, 1])), 1)),
+                                      mean=(round(float(a[:, 0].mean()), 1), round(float(a[:, 1].mean()), 1)))
+        # stationarity: allow ~3 sigma of per-frame cube noise (partially occluded cubes are noisier)
+        if np.ptp(a[:, 0]) > 10.0 or np.ptp(a[:, 1]) > 10.0:
             return None
         return a
 
@@ -386,7 +390,10 @@ class Supervisor:
             return False
         h = self._worst_half(color)
         x0, x1, y0, y1 = depot.bounds
-        return bool(np.all((a[:, 0] - h >= x0) & (a[:, 0] + h <= x1) & (a[:, 1] - h >= y0) & (a[:, 1] + h <= y1)))
+        # judge the MEAN of the stationary window (per-frame noise would reject a correctly placed cube)
+        mx, my = float(a[:, 0].mean()), float(a[:, 1].mean())
+        self.last_confirm_diag.update(half=round(h, 1))
+        return bool(mx - h >= x0 and mx + h <= x1 and my - h >= y0 and my + h <= y1)
 
     def on_delivered(self, rid: int, color: str, t: float) -> None:
         self.delivered.add(color)
