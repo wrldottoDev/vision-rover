@@ -211,7 +211,9 @@ class Supervisor:
                 if mine is None or shapes.bbox_gap(mine, q) > 400.0:
                     out.append(PolyObstacle(_inflate(q, self.cfg.margins.rover_rover)))
                     continue
-                pad = min(self.cfg.margins.rover_rover, max(0.0, shapes.distance(mine, q) - 3.0))
+                # the planner also inflates MY footprint by pose_uncertainty: subtract it, or my start is "inside"
+                pad = min(self.cfg.margins.rover_rover,
+                          max(0.0, shapes.distance(mine, q) - self.cfg.margins.pose_uncertainty - 3.0))
                 out.append(PolyObstacle(_inflate(q, pad)))
         return out
 

@@ -339,7 +339,9 @@ class RoverAgent:
             self._go(S.IDLE, t, ctx, "resume")
 
     def _s_wait(self, t, est, safe, ctx):
-        if self.dwell(t) >= self.p.wait_retry_s:
+        # Back off while blocked by the other rover (each retry is a full planner query): 0.5, 0.75, ... <= 2 s.
+        retry = min(2.0, self.p.wait_retry_s * (1.0 + 0.5 * getattr(self, "blocked_streak", 0)))
+        if self.dwell(t) >= retry:
             r, self.resume = self.resume, None
             if self.engaged:
                 self._go(r if r in (S.RETREAT, S.VERIFY_CAPTURE) else S.VERIFY_CAPTURE, t, ctx, "retry")
@@ -413,12 +415,15 @@ class RoverAgent:
                 self._replan(t, ctx)
             return 0.0, 0.0
         v, w, st = self._navigate_to(t, est, ctx, leg.prepush, self._leg_region(ctx))
+        if st == "moving":
+            self.blocked_streak = 0
         if st == "arrived":
             self.path = None
             self.align_started = False
             self._go(S.ALIGN, t, ctx)
         elif st != "moving":
             self.path = None
+            self.blocked_streak = getattr(self, "blocked_streak", 0) + 1 if st == "blocked" else 0
             if st == "noplan":
                 self.stats.nav_failures += 1
             if not self._charge(self._NAV_WEIGHT[st], t, ctx, "nav " + st):
