@@ -16,7 +16,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from ..config import Config, DEFAULT
+from ..config import DEFAULT, ROVER_MOTORS, Config
 from ..estimation.cube_tracker import CubeTracker
 from ..estimation.pose_estimator import PoseEstimator
 from ..frames import wrap
@@ -29,7 +29,7 @@ from ..planning.push_planner import PushPlanner
 from ..planning.reservations import ReservationTable, imminent_collision, priority
 from ..planning.task_allocator import TaskAllocator
 from ..rover.fsm import PASSIVE, RoverAgent, S, Task
-from ..world import STOP, CubeEstimate, Frame, Path, Pose, RoverEstimate, WheelCommand
+from ..world import STOP, CubeEstimate, Frame, Path, Pose, RoverEstimate, TrackQuality, WheelCommand
 
 OBSTACLE_HALF_DIAG = 100.0 / math.sqrt(2.0)      # official yellow blocks: 10 cm
 
@@ -443,9 +443,15 @@ class Supervisor:
         out = {}
         for rid in self.ids:
             v, w = self.cmd[rid]
+            if ests[rid].quality == TrackQuality.DEGRADED:        # stale-ish vision: keep going, slowly
+                k = self.cfg.telemetry.degraded_speed_scale
+                v, w = v * k, w * k
             wc = WheelCommand.from_unicycle(v, w, self.cfg.rover.track_width, self.cfg.limits.wheel_speed_max)
             v2, w2 = wc.unicycle(self.cfg.rover.track_width)
-            self.est[rid].set_command(t, v2, w2)
+            self.est[rid].set_command(t, v2, w2)                 # the estimator models the INTENDED twist
+            mc = ROVER_MOTORS.get(rid)
+            if mc is not None:                                    # per-rover feed-forward (hardware asymmetry)
+                wc = WheelCommand(wc.v_left * mc.left_scale, wc.v_right * mc.right_scale)
             out[rid] = wc
         return out
 

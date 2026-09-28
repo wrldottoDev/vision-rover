@@ -28,7 +28,7 @@ from ..config import Config
 from ..control.controllers import (AlignController, CaptureController, PushController, RetreatController,
                                    SegmentFollower)
 from ..frames import angle_diff
-from ..world import CubeEstimate, Path, Pose, PushPlan, RoverEstimate, SegKind
+from ..world import CubeEstimate, Path, Pose, PushPlan, RoverEstimate, SegKind, TrackQuality
 
 
 class S(enum.Enum):
@@ -472,6 +472,8 @@ class RoverAgent:
             if not self._charge(0.5, t, ctx, "align lateral too large"):
                 self._start_nav(t, ctx)
             return 0.0, 0.0
+        if est.quality != TrackQuality.GOOD:
+            return 0.0, 0.0                          # never start a capture on degraded localization
         if not self.align_started:
             self.align.reset((float(p0[0]), float(p0[1])), phi)
             self.align_started = True

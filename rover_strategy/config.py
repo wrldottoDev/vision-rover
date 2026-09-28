@@ -124,13 +124,18 @@ class MotionLimits:
 
 @dataclass(frozen=True)
 class TelemetryPolicy:
-    good_age_s: float = 0.15
-    degraded_age_s: float = 0.40             # contract 6.4 suggests stopping > 0.5 s latency
-    lost_age_s: float = 0.40
-    max_blind_travel_mm: float = 30.0        # dead-reckoning allowance before forced stop
-    pos_std_stop_mm: float = 12.0            # 1-sigma position uncertainty that forces STOP
+    """Vision freshness policy.  Ages are CAPTURE ages (now - capture time, incl. network latency).
+    Team-reported real latency: p95 ~470 ms, max ~1420 ms (USER-REPORTED, no logs in repo).
+    GOOD -> normal; DEGRADED -> keep executing slowly (speed x degraded_speed_scale), never START a capture;
+    LOST (age, covariance, blind travel, actuator fault) -> stop, relocalize, re-verify/replan."""
+    good_age_s: float = 0.35                 # ASSUMED: covers typical latency (p95 470 ms reported)
+    degraded_age_s: float = 1.5              # kept for compatibility; equals lost_age_s (3 quality bands)
+    lost_age_s: float = 1.5                  # ASSUMED: ~max reported latency; beyond this stop
+    degraded_speed_scale: float = 0.5        # ASSUMED
+    max_blind_travel_mm: float = 60.0        # dead-reckoning path length allowed since the last accepted fix
+    pos_std_stop_mm: float = 15.0            # 1-sigma position uncertainty that forces STOP
     heading_std_stop_rad: float = math.radians(6.0)
-    cube_fresh_s: float = 0.2
+    cube_fresh_s: float = 0.6                # cube observation capture age usable for control (latency incl.)
     cube_stale_s: float = 1.5
 
 
@@ -154,6 +159,22 @@ class PlannerConfig:
     nav_cell_mm: float = 20.0
     nav_heading_bins: int = 24
     nav_max_expansions: int = 120_000
+
+
+@dataclass(frozen=True)
+class MotorCalibration:
+    """Per-rover feed-forward applied to commanded wheel speeds before they are sent.  USER-REPORTED distance tests
+    (docs/MEASUREMENTS.md): R10 balanced; R11 right wheel ~7-9 % faster -> right command scaled by ~0.92.
+    NOT FINAL: the test duration is unknown and the ratio varies with throttle (0.907 @50 %, 0.926 @70 %,
+    0.931 @100 %)."""
+    right_scale: float = 1.0
+    left_scale: float = 1.0
+
+
+ROVER_MOTORS: dict[int, MotorCalibration] = {
+    10: MotorCalibration(right_scale=0.99),      # 100 %: 57.5 / 58.0 cm
+    11: MotorCalibration(right_scale=0.92),      # experimental, under test on hardware
+}
 
 
 @dataclass(frozen=True)

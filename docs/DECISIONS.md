@@ -27,3 +27,11 @@ Format: decision — why — evidence — status.
     degrades to a soft risk prior instead of forbidding all headings. ACTIVE.
 13. **Workflow (2026-09-28)**: Opus = architect/final auditor; GPT Luna (codex) = implementation workers on
     `codex-auto*` branches; nothing merges to main without Opus review. ACTIVE.
+14. **Vision-loss policy adapted to reported latency (p95 470 ms)**: GOOD <= 0.35 s capture age; DEGRADED up to 1.5 s
+    = keep executing at 0.5x speed, never start a capture; LOST beyond 1.5 s, or blind path > 60 mm, or sigma > 15 mm,
+    or actuator-fault latch. Cube observations usable for control up to 0.6 s capture age (latency-compensated).
+    ASSUMED values pending real latency logs. ACTIVE.
+15. **Per-rover wheel feed-forward** (`config.ROVER_MOTORS`): R11 right command x0.92 (NOT FINAL), R10 x0.99. The
+    estimator models the intended twist; feed-forward only compensates the hardware. ACTIVE.
+16. **Arc motion primitives required**: without them edge-parallel pre-push poses are unreachable (coverage 65 % ->
+    5-29 % when reachability is enforced). Delegated to Luna lane C; reachability check kept as an option. IN PROGRESS.

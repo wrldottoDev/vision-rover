@@ -11,8 +11,9 @@
 - **Navigation planning is slow** (~0.3-1.5 s per query, dominates simulation time) — Python hull/SAT in hot loop.
 
 ## Important
-- Telemetry policy assumes ~50-150 ms latency; the team reports p95 470 ms / max 1420 ms. With `lost_age_s = 0.4`
-  rovers would stop constantly. DEGRADED-mode driving (slow, no capture start) is NOT IMPLEMENTED.
+- **Edge-parallel pre-push poses are unreachable** (no arc primitives in navigation): corner-depot deliveries along
+  edges currently fail at the last leg ("deadline exceeded" in nav). Lane C (Luna) is adding arcs.
+- DEGRADED policy now implemented with ASSUMED thresholds; needs real latency logs to tune.
 - Protocol v2 (USER-REPORTED) not supported; no schema in repo.
 - Marker offset ~24 mm (USER-REPORTED) not yet applied; must confirm whether the deployed vision compensates it.
 - Motor model in the simulator is random asymmetry, not the measured R10/R11 characterisation.
