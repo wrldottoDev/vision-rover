@@ -288,6 +288,8 @@ class SegmentFollower:
         self._last_cross = 0.0
         self._last_heading = 0.0
         self._last_t: float | None = None
+        self._arc_center = (0.0, 0.0)
+        self._arc_start_radius_angle = 0.0
 
     def reset(self, seg: Segment) -> None:
         self.seg = seg
@@ -295,9 +297,43 @@ class SegmentFollower:
         self._last_t = None
         if seg.kind is SegKind.ROTATE:
             self._rotate.reset(seg.end.theta)
+        elif seg.kind is SegKind.ARC:
+            # For an ARC, every chassis point rotates about this centre.  The rover centre's
+            # radial angle advances by curvature * travelled distance, including reverse motion.
+            k = seg.curvature
+            assert abs(k) > 1e-12, "ARC requires nonzero curvature"
+            q0 = seg.start.theta + (math.pi if seg.reverse else 0.0)
+            self._arc_center = (seg.start.x - math.sin(q0) / k,
+                                seg.start.y + math.cos(q0) / k)
+            self._arc_start_radius_angle = math.atan2(seg.start.y - self._arc_center[1],
+                                                      seg.start.x - self._arc_center[0])
         else:
             line = _Line.through((seg.start.x, seg.start.y), (seg.end.x, seg.end.y), reverse=seg.reverse)
             self._line.reset(line)
+
+    def _arc_tracking_errors(self, pose: Pose) -> tuple[float, float, float]:
+        """Return (arc progress, radial/tangent cross error, heading error).
+
+        Cross error is measured positive to the left of the direction of travel, exactly like
+        the straight-line law.  Thus the same correction signs work for forward and reverse
+        arcs; only the feed-forward body omega uses the positive speed magnitude.
+        """
+        assert self.seg is not None and self.seg.kind is SegKind.ARC
+        seg = self.seg
+        k = seg.curvature
+        cx, cy = self._arc_center
+        radius_angle = math.atan2(pose.y - cy, pose.x - cx)
+        dangle = angle_diff(radius_angle, self._arc_start_radius_angle)
+        progress = min(seg.length, max(0.0, dangle / k))
+        q = seg.start.theta + (math.pi if seg.reverse else 0.0) + k * progress
+        body_ref = q - math.pi if seg.reverse else q
+        ideal = Pose(cx + (seg.start.x - cx) * math.cos(k * progress)
+                     - (seg.start.y - cy) * math.sin(k * progress),
+                     cy + (seg.start.x - cx) * math.sin(k * progress)
+                     + (seg.start.y - cy) * math.cos(k * progress), body_ref)
+        nx, ny = -math.sin(q), math.cos(q)
+        cross = (pose.x - ideal.x) * nx + (pose.y - ideal.y) * ny
+        return progress, cross, angle_diff(pose.theta, body_ref)
 
     def _dt(self, t: float) -> float:
         dt = 1.0 / 30.0 if self._last_t is None else max(t - self._last_t, 1e-6)
@@ -313,17 +349,43 @@ class SegmentFollower:
             self._last_heading = angle_diff(self.seg.end.theta, pose.theta)
             return 0.0, omega, done
 
+        if self.seg.kind is SegKind.ARC:
+            along, cross, e_h = self._arc_tracking_errors(pose)
+            self._last_along, self._last_cross, self._last_heading = along, cross, e_h
+            remaining = self.seg.length - along
+            # Add the reported observation age to the motor time constant so delayed estimates
+            # do not make a terminal ARC/STRAIGHT hand-off coast past the endpoint.
+            predicted_coast = abs(est.v) * (self.params.stop_lag_s + max(est.age_s, 0.0))
+            # Do not declare completion merely because the angular progress reached the end:
+            # a lagged/asymmetric rover must also settle onto the terminal circle and tangent.
+            if (remaining <= self.params.line_along_tol + predicted_coast
+                    and abs(cross) <= 5.0
+                    and abs(e_h) <= self.params.rotate_tol):
+                return 0.0, 0.0, True
+            v_cap = self.cfg.limits.v_nav
+            v_mag = min(_decel_speed(max(remaining - predicted_coast, 0.0), self.params.accel, v_cap),
+                        _decel_speed(max(along, 0.0), self.params.accel, v_cap))
+            if remaining > self.params.line_along_tol + predicted_coast:
+                v_mag = max(v_mag, self.params.v_min_moving)
+            # curvature is defined per positive distance along the travel tangent.  In reverse,
+            # the body command v is negative but body omega retains this same signed feed-forward.
+            omega = self.seg.curvature * v_mag + self._line.omega(e_h, cross, v_mag)
+            omega = max(-self.cfg.limits.w_nav, min(self.cfg.limits.w_nav, omega))
+            return (-v_mag if self.seg.reverse else v_mag), omega, False
+
         along, cross, e_h = self._line.errors(pose)
         self._last_along, self._last_cross, self._last_heading = along, cross, e_h
         length = self.seg.length
         remaining = length - along
-        if remaining <= self.params.line_along_tol:
+        predicted_coast = abs(est.v) * (self.params.stop_lag_s + max(est.age_s, 0.0))
+        if remaining <= self.params.line_along_tol + predicted_coast:
             return 0.0, 0.0, True
 
         v_cap = self.cfg.limits.v_nav
         v_mag = min(_decel_speed(remaining, self.params.accel, v_cap),
                     _decel_speed(max(along, 0.0), self.params.accel, v_cap))
-        v_mag = max(v_mag, self.params.v_min_moving)
+        if remaining > self.params.line_along_tol + predicted_coast:
+            v_mag = max(v_mag, self.params.v_min_moving)
         omega = self._line.omega(e_h, cross, v_mag)
         v = -v_mag if self.seg.reverse else v_mag
         return v, omega, False

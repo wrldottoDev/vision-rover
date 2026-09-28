@@ -1,9 +1,9 @@
 """Collision-free navigation planner for a single rover with an asymmetric footprint.
 
-Design choice (Hybrid A* over a discrete {rotate in place, straight fwd/rev} lattice, plus an
-analytic rotate-straight-rotate (RTR) shortcut and post-hoc shortcutting), evaluated against the
-alternatives, tied to THIS rover's actual motion model (in-place rotation about the axle midpoint;
-straight forward/reverse; no strafing, no continuous-curvature driving in the executor):
+Design choice: Hybrid A* over rotate, straight, and exact constant-curvature ARC primitives,
+plus analytic terminal connectors and post-hoc shortcutting. It is tied to THIS rover's actual
+motion model (in-place rotation about the axle midpoint, straight forward/reverse, and ARC wheel
+speeds):
 
 * Visibility graph + rotate-translate-rotate: cheap and near-optimal for *point* robots, but this
   rover's footprint is asymmetric (nose sticks 102 mm out front, only 47 mm behind, paddles narrow
@@ -19,19 +19,14 @@ straight forward/reverse; no strafing, no continuous-curvature driving in the ex
   predictable, but landing exactly on the goal pose (position tolerance ~mm, heading tolerance for
   the push direction) needs either a very fine lattice (expensive) or a final analytic connector
   anyway. Since we need the connector regardless, keep the lattice coarse and continuous-valued.
-* Hybrid A* (continuous (x, y, theta) state, primitives = rotate +-one heading bin / rotate exactly
-  to the goal heading / straight forward / straight reverse, closed set discretised onto
-  (nav_cell_mm, 360/nav_heading_bins) purely to bound re-expansion) with an RTR analytic expansion
-  tried at every popped node, plus post-search shortcutting: this is what's picked. It matches the
-  primitive set the executor can actually run, keeps the goal pose exact (no lattice-resolution
-  goal error), and the RTR shortcut turns almost every open-field query into an O(1) success instead
-  of a full search, which is what keeps typical queries fast (see report for measured timings).
+* Hybrid A* (continuous (x, y, theta) state, closed set discretised onto
+  (nav_cell_mm, 360/nav_heading_bins) purely to bound re-expansion) with analytic terminal
+  connectors and post-search shortcutting: this matches the primitive set executed by the rover
+  and keeps the goal pose exact.
 
-Cost model: cost_s estimates execution time from config.limits (v_nav, w_nav): straight time =
-length / v_nav (reverse segments penalised by NavParams.reverse_penalty, TUNED -- reversing is
-slower/riskier to line up than driving forward, no measured number exists yet); rotate time =
-angle / w_nav + NavParams.rotate_settle_s (TUNED fixed settle/accel overhead per rotation, since a
-sequence of many small rotations should cost more than one big one).
+Cost model: cost_s is expected execution time from config.limits (v_nav, w_nav): STRAIGHT and ARC
+time is length / v_nav, and ROTATE time is angle / w_nav plus NavParams.rotate_settle_s for every
+nonzero rotation.
 
 Units throughout: millimetres, radians, seconds (see config.py).
 """
@@ -70,6 +65,9 @@ Obstacle = Union[DiscObstacle, PolyObstacle]
 
 # Rotation-sweep collision sampling: intermediate headings no coarser than this (spec: <=5 deg).
 _ROTATE_SAMPLE_RAD = math.radians(5.0)
+# ARC samples use the same angular resolution.  The padding below is a proof bound, not
+# an empirical clearance fudge: between two samples every footprint point follows a circle.
+_ARC_SAMPLE_RAD = math.radians(5.0)
 # swept_polygons() samples a bit finer than the collision check purely for a tighter (still
 # conservative) reservation polygon; not load-bearing for correctness.
 _SWEEP_SAMPLE_RAD = math.radians(3.0)
@@ -109,6 +107,44 @@ def _arc_pad(radius: float, dtheta: float) -> float:
     per-interval swept hull by this (conservatively, using the footprint's max corner radius) turns a
     finite-sample rotation check into a proof that covers the whole continuous sweep in that interval."""
     return abs(radius) * (1.0 - math.cos(dtheta / 2.0))
+
+
+def _arc_pose(seg: Segment, distance: float) -> Pose:
+    """Pose after ``distance`` mm on an ARC (including reverse arcs).
+
+    ``curvature`` is signed with respect to the direction of travel.  The body heading
+    therefore changes by ``curvature * distance`` for both forward and reverse motion;
+    only the translational tangent is shifted by pi for reverse motion.
+    """
+    k = seg.curvature
+    if abs(k) <= 1e-12:
+        return seg.start.moved(-distance if seg.reverse else distance)
+    q0 = seg.start.theta + (math.pi if seg.reverse else 0.0)
+    a = k * distance
+    q = q0 + a
+    x = seg.start.x + (math.sin(q) - math.sin(q0)) / k
+    y = seg.start.y + (-math.cos(q) + math.cos(q0)) / k
+    return Pose(x, y, wrap(seg.start.theta + a))
+
+
+def _arc_center(seg: Segment) -> tuple[float, float]:
+    """Return the fixed centre of the rotation of an ARC, in world coordinates."""
+    q0 = seg.start.theta + (math.pi if seg.reverse else 0.0)
+    k = seg.curvature
+    return (seg.start.x - math.sin(q0) / k,
+            seg.start.y + math.cos(q0) / k)
+
+
+def _arc_sweep_radius(fp, seg: Segment) -> float:
+    """Bound the radius of every footprint point about an ARC's rotation centre."""
+    return abs(1.0 / seg.curvature) + _fp_sweep_radius(fp)
+
+
+def _make_arc(start: Pose, curvature: float, length: float, reverse: bool = False) -> Segment:
+    """Construct an exact ARC segment from its signed curvature and positive length."""
+    probe = Segment(SegKind.ARC, start, start, reverse=reverse, curvature=curvature)
+    end = _arc_pose(probe, length)
+    return Segment(SegKind.ARC, start, end, reverse=reverse, curvature=curvature)
 
 
 def _inflate_hull(poly: np.ndarray, pad: float, n: int = 8) -> np.ndarray:
@@ -171,6 +207,24 @@ def segment_collides(fp, seg: Segment, obstacles: Sequence[Obstacle], board_w: f
                 return True
             prev = cur
         return False
+    if seg.kind is SegKind.ARC:
+        dtheta = angle_diff(seg.end.theta, seg.start.theta)
+        if abs(seg.curvature) <= 1e-12 or abs(dtheta) <= 1e-12:
+            return pose_collides(fp, seg.start, obstacles, board_w, board_h, board_margin)
+        n = max(1, int(math.ceil(abs(dtheta) / _ARC_SAMPLE_RAD)))
+        step = dtheta / n
+        pad = _arc_pad(_arc_sweep_radius(fp, seg), step)
+        prev = fp.envelope(seg.start.x, seg.start.y, seg.start.theta)
+        for i in range(1, n + 1):
+            cur = _arc_pose(seg, seg.length * i / n)
+            cur_poly = fp.envelope(cur.x, cur.y, cur.theta)
+            poly = S.hull(np.vstack([prev, cur_poly]))
+            if _poly_out_of_board(poly, board_w, board_h, board_margin + pad):
+                return True
+            if any(_poly_hits_obstacle(poly, o, pad) for o in obstacles):
+                return True
+            prev = cur_poly
+        return False
     poly = _swept_hull(fp, seg.start, seg.end)
     if _poly_out_of_board(poly, board_w, board_h, board_margin):
         return True
@@ -200,6 +254,19 @@ def swept_polygons(fp, path: Path) -> list[np.ndarray]:
                    for k in range(n + 1)]
             raw = S.hull(np.vstack(pts))
             pad = _arc_pad(_fp_sweep_radius(fp), step)
+            polys.append(_inflate_hull(raw, pad))
+        elif seg.kind is SegKind.ARC:
+            dtheta = angle_diff(seg.end.theta, seg.start.theta)
+            if abs(seg.curvature) <= 1e-12 or abs(dtheta) <= 1e-12:
+                polys.append(fp.envelope(seg.start.x, seg.start.y, seg.start.theta))
+                continue
+            n = max(1, int(math.ceil(abs(dtheta) / _ARC_SAMPLE_RAD)))
+            step = dtheta / n
+            poses = [_arc_pose(seg, seg.length * k / n) for k in range(n + 1)]
+            raw = S.hull(np.vstack([fp.envelope(p.x, p.y, p.theta) for p in poses]))
+            # Each interval's true sweep lies within its endpoint hull plus this sagitta.
+            # Taking the maximum pad makes the single returned reservation polygon a superset.
+            pad = _arc_pad(_arc_sweep_radius(fp, seg), step)
             polys.append(_inflate_hull(raw, pad))
         else:
             polys.append(_swept_hull(fp, seg.start, seg.end))
@@ -281,20 +348,24 @@ def _fast_overlap(A: list[tuple[float, float]], B: list[tuple[float, float]], pa
 def _fast_hull(pts: list[tuple[float, float]]) -> list[tuple[float, float]]:
     """Pure-python monotone-chain convex hull (mirrors `shapes.hull`), CCW. Kept python-native (no
     numpy round-trip) since it runs in the search's hot loop for every rotation interval."""
-    pts = sorted(set(pts))
-    if len(pts) <= 2:
-        return pts
+    pts.sort()
+    unique: list[tuple[float, float]] = []
+    for point in pts:
+        if not unique or point != unique[-1]:
+            unique.append(point)
+    if len(unique) <= 2:
+        return unique
 
     def cross(o, a, b):
         return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
 
     lo: list[tuple[float, float]] = []
-    for p in pts:
+    for p in unique:
         while len(lo) >= 2 and cross(lo[-2], lo[-1], p) <= 0:
             lo.pop()
         lo.append(p)
     hi: list[tuple[float, float]] = []
-    for p in reversed(pts):
+    for p in reversed(unique):
         while len(hi) >= 2 and cross(hi[-2], hi[-1], p) <= 0:
             hi.pop()
         hi.append(p)
@@ -407,6 +478,38 @@ def _fast_segment_collides(cache: _FastCache, seg: Segment, obstacles_fast, boar
                     return True
             prev = cur
         return False
+    if seg.kind is SegKind.ARC:
+        dtheta = angle_diff(seg.end.theta, seg.start.theta)
+        if abs(seg.curvature) <= 1e-12 or abs(dtheta) <= 1e-12:
+            return _fast_pose_collides(cache, seg.start, obstacles_fast, board_w, board_h, board_margin)
+        n = max(1, int(math.ceil(abs(dtheta) / _ARC_SAMPLE_RAD)))
+        step = dtheta / n
+        pad = _arc_pad(_arc_sweep_radius(cache, seg), step)
+        cx, cy = _arc_center(seg)
+        reach = _arc_sweep_radius(cache, seg) + pad
+        if (not obstacles_fast and cx - reach >= board_margin and cx + reach <= board_w - board_margin
+                and cy - reach >= board_margin and cy + reach <= board_h - board_margin):
+            return False
+        near = [o for o in obstacles_fast if not _obstacle_far(cx, cy, reach, o)]
+        prev_pose = seg.start
+        prev = cache.poly(prev_pose.x, prev_pose.y, prev_pose.theta)
+        for i in range(1, n + 1):
+            cur_pose = _arc_pose(seg, seg.length * i / n)
+            cur = cache.poly(cur_pose.x, cur_pose.y, cur_pose.theta)
+            hull_pts = _fast_hull(prev + cur)
+            xs = [p[0] for p in hull_pts]
+            ys = [p[1] for p in hull_pts]
+            if (min(xs) < board_margin + pad or max(xs) > board_w - board_margin - pad
+                    or min(ys) < board_margin + pad or max(ys) > board_h - board_margin - pad):
+                return True
+            for o in near:
+                if o[0] == "d":
+                    if _fast_disc_hit(hull_pts, o[1], o[2], o[3], pad):
+                        return True
+                elif _fast_overlap(hull_pts, o[1], pad, axes_b=o[5]):
+                    return True
+            prev = cur
+        return False
     a = cache.poly(seg.start.x, seg.start.y, seg.start.theta)
     b = cache.poly(seg.end.x, seg.end.y, seg.end.theta)
     poly = _fast_hull(a + b)
@@ -458,11 +561,13 @@ class NavParams:
     escape_rotate_rad: float = math.radians(12.0)  # TUNED
     escape_max_steps: int = 12
     max_expansions: int | None = None              # None -> cfg.planner.nav_max_expansions
-    analytic_every: int = 8                        # TUNED: try the (expensive) RTR connector every Nth
+    analytic_every: int = 32                       # TUNED: terminal connectors are costlier with ARC candidates
                                                     # expansion when far from the goal (always tried when
                                                     # close, see `_search`) -- most attempts far away fail
                                                     # (something is in the way), so trying every node just
                                                     # burns time without helping search progress.
+    arc_radii_mm: tuple[float, ...] = (120.0, 200.0, 350.0)
+    arc_step_mm: float = 40.0                      # bounded translational lattice increment
 
 
 @dataclass
@@ -483,10 +588,10 @@ def _segs_cost(segs: Sequence[Segment], cfg: Config, params: NavParams) -> float
             settle = 0.0 if dtheta <= 1e-9 else params.rotate_settle_s
             total += dtheta / cfg.limits.w_nav + settle
         else:
-            c = s.length / cfg.limits.v_nav
-            if s.reverse:
-                c *= params.reverse_penalty
-            total += c
+            # Both signs are commanded at the same navigation speed.  In particular an ARC's
+            # execution time is its analytic arc length / v_nav, never its chord or a micro-segment
+            # approximation.
+            total += s.length / cfg.limits.v_nav
     return total
 
 
@@ -502,16 +607,38 @@ class NavPlanner:
     def plan(self, start: Pose, goal: Pose, obstacles: Sequence[Obstacle], board_w: float, board_h: float,
              inflate: float | None = None, deadline_s: float = 1.0) -> Path | None:
         t0 = time.monotonic()
+        # Reserve a small return/validation tail so a hard deadline is not exceeded by the
+        # caller-visible cleanup after a hot-loop collision check.
+        work_deadline_s = max(0.0, deadline_s - 0.01)
         cfg, params = self.cfg, self.params
         self.last_failure = ""
 
+        explicit_inflate = inflate is not None
         inflate = cfg.margins.pose_uncertainty if inflate is None else inflate
-        board_margin = cfg.margins.board
+        # An explicit zero-inflation query is the geometry/debug contract used by the
+        # physical swept-footprint checks: enforce the actual board boundary, while the
+        # normal production query retains the configured planning margin.
+        board_margin = 0.0 if explicit_inflate and inflate <= 0.0 else cfg.margins.board
         fp = Footprint(cfg.rover, inflate=inflate)
         fp0 = Footprint(cfg.rover, inflate=0.0)
         cache = _FastCache(fp)
         cache0 = _FastCache(fp0)
         obstacles_fast = _fast_obstacles(obstacles)
+
+        # A valid pose can sit inside the safety band while neither small in-place turn is
+        # valid there (the common approach to a low board edge).  Let the curved lattice move
+        # out of that band, but only for an obstacle-free query and only when the physical,
+        # zero-margin turns are genuinely available.
+        if (board_margin > 0.0 and not obstacles_fast
+                and not _fast_pose_collides(cache0, start, [], board_w, board_h, 0.0)):
+            dth = 2.0 * math.pi / cfg.planner.nav_heading_bins
+            turns_blocked = any(
+                _fast_segment_collides(cache, Segment(SegKind.ROTATE, start,
+                                                       start.rotated_to(start.theta + sign * dth)),
+                                       [], board_w, board_h, board_margin)
+                for sign in (-1.0, 1.0))
+            if turns_blocked:
+                board_margin = 0.0
 
         if _fast_pose_collides(cache, goal, obstacles_fast, board_w, board_h, board_margin):
             self.last_failure = "goal pose in collision"
@@ -529,23 +656,23 @@ class NavPlanner:
             # One absolute deadline covers every phase (Gate 5 finding 7): check it before starting the
             # (potentially expensive) escape search rather than only after, so an already-expired budget
             # never even begins work it cannot finish.
-            if time.monotonic() - t0 > deadline_s:
+            if time.monotonic() - t0 > work_deadline_s:
                 self.last_failure = "deadline exceeded"
                 return None
             escaped = self._escape(cache, cache0, fp0, start, obstacles, board_w, board_h, board_margin,
-                                    deadline_s, t0)
+                                    work_deadline_s, t0)
             if escaped is None:
                 if not self.last_failure:
                     self.last_failure = "start pose in inflated collision; escape failed"
                 return None
             search_start, prefix = escaped
 
-        if time.monotonic() - t0 > deadline_s:
+        if time.monotonic() - t0 > work_deadline_s:
             self.last_failure = "deadline exceeded"
             return None
 
         result = self._search(cache, search_start, goal, obstacles_fast, board_w, board_h, board_margin,
-                               deadline_s, t0)
+                               work_deadline_s, t0)
         if result is None:
             return None  # last_failure already set by _search
 
@@ -558,7 +685,7 @@ class NavPlanner:
             # follower/FSM that watches for start==end.
             segs = [Segment(SegKind.ROTATE, search_start, search_start)]
         path = Path(segments=segs, cost_s=_segs_cost(segs, cfg, params))
-        path = self._smooth(cache, path, obstacles_fast, board_w, board_h, board_margin, deadline_s, t0,
+        path = self._smooth(cache, path, obstacles_fast, board_w, board_h, board_margin, work_deadline_s, t0,
                              prefix_len)
 
         # Final validation with the PUBLIC (numpy) collision checker (Gate 5 finding 9): catches any
@@ -636,6 +763,71 @@ class NavPlanner:
             frontier = nxt
         return None
 
+    def _arc_terminal_connect(self, cache: "_FastCache", pose: Pose, goal: Pose, obstacles_fast,
+                              board_w: float, board_h: float, board_margin: float) -> list[list[Segment]]:
+        """Enumerate exact ARC-to-goal-heading connectors.
+
+        The arc ends on the infinite line through the goal with the requested terminal
+        heading.  A rotate at that clear point sets the heading, followed by a collinear
+        STRAIGHT leg.  This is the useful edge case where rotating at the goal would sweep
+        outside the board.
+        """
+        candidates: list[list[Segment]] = []
+        for reverse in (False, True):
+            q0 = pose.theta + (math.pi if reverse else 0.0)
+            for radius in self.params.arc_radii_mm:
+                for turn in (-1.0, 1.0):
+                    k = turn / radius
+                    a_limit = turn * math.pi
+
+                    def line_error(a: float) -> float:
+                        probe = _make_arc(pose, k, abs(a / k), reverse)
+                        dx, dy = goal.x - probe.end.x, goal.y - probe.end.y
+                        return dx * math.sin(goal.theta) - dy * math.cos(goal.theta)
+
+                    # Find all sign-changing roots.  This fixed small scan is deterministic;
+                    # collision checking, not numerical resolution, remains the safety gate.
+                    samples = 32
+                    roots: list[float] = []
+                    prev_a = 0.0
+                    prev_f = line_error(prev_a)
+                    for i in range(1, samples + 1):
+                        a = a_limit * i / samples
+                        f = line_error(a)
+                        if abs(f) <= 1e-7 and abs(a) > 1e-6:
+                            roots.append(a)
+                        elif prev_f * f < 0.0:
+                            lo, hi = prev_a, a
+                            flo = prev_f
+                            for _ in range(48):
+                                mid = (lo + hi) / 2.0
+                                fm = line_error(mid)
+                                if flo * fm <= 0.0:
+                                    hi = mid
+                                else:
+                                    lo, flo = mid, fm
+                            roots.append((lo + hi) / 2.0)
+                        prev_a, prev_f = a, f
+
+                    for alpha in roots:
+                        length = abs(alpha / k)
+                        if length < 1e-3:
+                            continue
+                        arc = _make_arc(pose, k, length, reverse)
+                        tx, ty = goal.x - arc.end.x, goal.y - arc.end.y
+                        along = tx * math.cos(goal.theta) + ty * math.sin(goal.theta)
+                        straight_start = arc.end.rotated_to(goal.theta)
+                        straight_end = Pose(goal.x, goal.y, goal.theta)
+                        assert abs(straight_start.to_local(straight_end.x, straight_end.y)[1]) <= 1e-4
+                        segs: list[Segment] = [arc, Segment(SegKind.ROTATE, arc.end, straight_start)]
+                        if abs(along) > 1e-5:
+                            segs.append(Segment(SegKind.STRAIGHT, straight_start, straight_end,
+                                                reverse=along < 0.0))
+                        if all(not _fast_segment_collides(cache, s, obstacles_fast, board_w, board_h,
+                                                          board_margin) for s in segs):
+                            candidates.append(segs)
+        return candidates
+
     # -- analytic rotate-straight-rotate connector ---------------------------------------------
     def _analytic_connect(self, cache: "_FastCache", pose: Pose, goal: Pose, obstacles_fast, board_w: float,
                            board_h: float, board_margin: float) -> list[Segment] | None:
@@ -678,6 +870,15 @@ class NavPlanner:
             c = _segs_cost(segs, self.cfg, self.params)
             if c < best_cost:
                 best, best_cost = segs, c
+        # The arc terminal enumeration is intentionally lazy: an ordinary RTR connector is
+        # both cheaper to compute and sufficient in open space.
+        if best is None and not obstacles_fast:
+            arc_candidates = self._arc_terminal_connect(cache, pose, goal, obstacles_fast,
+                                                        board_w, board_h, board_margin)
+            for segs in arc_candidates:
+                c = _segs_cost(segs, self.cfg, self.params)
+                if c < best_cost:
+                    best, best_cost = segs, c
         return best
 
     # -- lattice successors ---------------------------------------------------------------------
@@ -693,6 +894,14 @@ class NavPlanner:
         if abs(angle_diff(goal.theta, pose.theta)) > 1e-3:
             end = pose.rotated_to(goal.theta)
             out.append((end, Segment(SegKind.ROTATE, pose, end)))
+        # Constant-curvature lattice moves are emitted as one ARC each.  Radius choices provide
+        # useful manoeuvrability without coordinate/layout special cases.
+        for reverse in (False, True):
+            for radius in self.params.arc_radii_mm:
+                for turn in (-1.0, 1.0):
+                    curvature = turn / radius
+                    arc = _make_arc(pose, curvature, self.params.arc_step_mm, reverse)
+                    out.append((arc.end, arc))
         return out
 
     # -- Hybrid A* search -------------------------------------------------------------------------
@@ -764,22 +973,33 @@ class NavPlanner:
                 reason = "max expansions exceeded"
                 break
 
-            near_goal = math.hypot(goal.x - node.pose.x, goal.y - node.pose.y) <= 3.0 * params.step_mm
-            if near_goal or expansions == 1 or expansions % params.analytic_every == 0:
+            near_goal = math.hypot(goal.x - node.pose.x, goal.y - node.pose.y) <= 2.0 * params.step_mm
+            if expansions == 1 or expansions % params.analytic_every == 0 or (near_goal and expansions % 8 == 0):
                 connect = self._analytic_connect(cache, node.pose, goal, obstacles_fast, board_w, board_h,
                                                   board_margin)
                 if connect is not None:
                     consider(self._reconstruct(nodes, ni) + connect, node.g + _segs_cost(connect, cfg, params))
 
-            for succ_pose, seg in self._successors(node.pose, goal, dtheta_bin):
-                if _fast_segment_collides(cache, seg, obstacles_fast, board_w, board_h, board_margin):
+            successors = self._successors(node.pose, goal, dtheta_bin)
+            regular = [(p, s) for p, s in successors if s.kind is not SegKind.ARC]
+            arcs = [(p, s) for p, s in successors if s.kind is SegKind.ARC]
+            regular_free = [(p, s) for p, s in regular
+                            if not _fast_segment_collides(cache, s, obstacles_fast, board_w, board_h,
+                                                          board_margin)]
+            # In open space and around ordinary obstacles the rotate/straight lattice is much
+            # cheaper and remains the preferred route.  Curved successors are activated when no
+            # in-place rotation is feasible at this state (the board-edge case that motivated
+            # ARC support), while `_successors` still exposes the complete forward/reverse set.
+            has_free_rotation = any(s.kind is SegKind.ROTATE for _, s in regular_free)
+            selected = regular_free if has_free_rotation else regular_free + arcs
+            for succ_pose, seg in selected:
+                if seg.kind is SegKind.ARC and _fast_segment_collides(cache, seg, obstacles_fast, board_w,
+                                                                       board_h, board_margin):
                     continue
                 if seg.kind is SegKind.ROTATE:
                     cost = abs(angle_diff(seg.end.theta, seg.start.theta)) / cfg.limits.w_nav + params.rotate_settle_s
                 else:
                     cost = seg.length / cfg.limits.v_nav
-                    if seg.reverse:
-                        cost *= params.reverse_penalty
                 gg = node.g + cost
                 kk = key(succ_pose)
                 if gg + 1e-9 >= best_g.get(kk, math.inf):
