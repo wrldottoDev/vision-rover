@@ -94,7 +94,8 @@ def run_scenario(sc: SC.Scenario, cfg: Config = DEFAULT, max_time: float = 300.0
             for rid, wc in cmds.items():
                 world.set_command(rid, wc, t)
                 ag = sup.agents[rid]
-                world.set_target(rid, ag.task.color if (ag.task and ag.engaged) else None)
+                # the task's own cube is never a NON-target contact (approach/alignment may brush it)
+                world.set_target(rid, ag.task.color if ag.task else None)
             for rid in world.rovers:
                 if rid in sup.est:
                     e = sup.est[rid].estimate(t)

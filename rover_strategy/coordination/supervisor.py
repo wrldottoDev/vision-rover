@@ -63,6 +63,7 @@ class SupervisorParams:
     clock_window_s: float = 20.0
     guard_lookahead_s: float = 0.35
     guard_brake_mm: float = 12.0
+    guard_edge_buffer_mm: float = 3.0       # estimation-bias buffer at the field edge (marker offset unknown)
     guard_rot_lookahead_s: float = 0.30     # worst command latency (0.1 s) + motor lag (0.2 s) at stop
     lost_rover_growth: float = 60.0          # mm added to a lost rover's reservation disc
     mission_min_cubes: int = 2
@@ -71,6 +72,12 @@ class SupervisorParams:
     # bound planning instead: otherwise results depend on CPU load and failing seeds are not reproducible.
     nav_deadline_s: float = 1.5
     push_deadline_s: float = 0.3
+
+
+def _field_violation(poly: np.ndarray, e0: float, w: float, h: float) -> float:
+    """How far (mm) a polygon sticks out of the field [e0, w-e0] x [e0, h-e0]; 0 if inside."""
+    return max(0.0, e0 - float(poly[:, 0].min()), float(poly[:, 0].max()) - (w - e0),
+               e0 - float(poly[:, 1].min()), float(poly[:, 1].max()) - (h - e0))
 
 
 def _min_sep(fp: Footprint, A: list[RoverEstimate], B: list[RoverEstimate], horizon: float) -> float:
@@ -601,9 +608,12 @@ class Supervisor:
                 polys.append(self.fp.envelope(x, y, th))
             why = None
             now_env = self.fp.envelope(e.pose.x, e.pose.y, e.pose.theta)
-            e0 = -self.overhang
-            now_in = shapes.inside_rect(now_env, e0, self.board_w - e0, e0, self.board_h - e0)
-            if now_in and not all(shapes.inside_rect(p, e0, self.board_w - e0, e0, self.board_h - e0) for p in polys):
+            # Field limit minus a small buffer for estimation bias (unknown marker offset ~ few mm).  Stop any motion
+            # that INCREASES the boundary violation -- including for a rover that is already (slightly) outside,
+            # which may only move back in (closed-loop finding: a rover drifting out kept pushing outward).
+            e0 = -self.overhang + self.p.guard_edge_buffer_mm
+            viol_now = _field_violation(now_env, e0, self.board_w, self.board_h)
+            if max(_field_violation(p, e0, self.board_w, self.board_h) for p in polys) > viol_now + 0.5:
                 why = "board"
             elif self._conflict(rid, polys):
                 why = "reservation"

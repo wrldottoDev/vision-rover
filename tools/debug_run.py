@@ -12,6 +12,11 @@ print("rovers", [(r.id, round(r.x), round(r.y), round(r.theta, 2)) for r in sc.r
 print("cubes", [(c.color, round(c.x), round(c.y), round(c.alpha, 2)) for c in sc.cubes])
 print("depots", sc.depots)
 captured = {}
+_oi = SC.instantiate
+def _inst(*a, **k):
+    w, e = _oi(*a, **k); captured["w"] = w; return w, e
+import rover_strategy.simulation.runner as _R
+_R.SC.instantiate = _inst
 orig = SUP.Supervisor.__init__
 def init(self, *a, **k):
     orig(self, *a, **k); captured['s'] = self
@@ -26,4 +31,9 @@ for e in s.events:
     if key == last: continue
     last = key
     print(e)
+w = captured.get("w")
+if w is not None:
+    for ev in w.events:
+        if ev.kind in ("rover_exit", "non_target_contact", "collision", "rover_fell", "cube_exit"):
+            print("PHYS", round(ev.t, 2), ev.kind, ev.data)
 d = asdict(r); d.pop('last_events'); print(json.dumps(d))
