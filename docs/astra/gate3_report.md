@@ -185,7 +185,7 @@ I read all requested files and checked the supporting modules as they became ava
     **Fix:** Retain obstacles with a defined conservative geometry and pass them through every planning and safety contract.
 
 25. **HIGH — Assumed depot geometry becomes mission truth, while the known visibility hazard remains unhandled.**  
-    [config.py:88](/Users/ottogonzalez/Documents/rover/V1/rover_strategy/config.py:88), [supervisor.py:166](/Users/ottogonzalez/Documents/rover/V1/rover_strategy/coordination/supervisor.py:166), [rules_constraints.md:28](/Users/ottogonzalez/Documents/rover/V1/docs/rules_constraints.md:28).
+    [config.py:88](/Users/ottogonzalez/Documents/rover/V1/rover_strategy/config.py:88), [supervisor.py:166](/Users/ottogonzalez/Documents/rover/V1/rover_strategy/coordination/supervisor.py:166), [RULES_AND_CONSTRAINTS.md:28](/Users/ottogonzalez/Documents/rover/V1/docs/RULES_AND_CONSTRAINTS.md:28).
 
     **Failure:** The documentation labels the 100 mm depot square as assumed, but `is_delivered()` uses it to retire tasks and finish the mission. Official v1 provides neither that boundary nor a delivery verdict. Separately, two successful corner deliveries can obscure two anchors and freeze vision permanently; freshness stopping prevents further motion but leaves the third delivery impossible. Neither allocation nor the supervisor’s planning contract enforces preservation of anchor visibility.
 

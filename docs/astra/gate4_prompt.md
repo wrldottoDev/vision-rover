@@ -1,6 +1,6 @@
 You are ASTRA, independent adversarial reviewer. GATE 4: state estimation. Repo root = current dir.
 Read rover_strategy/estimation/pose_estimator.py, rover_strategy/estimation/cube_tracker.py, tests/test_estimation.py,
-rover_strategy/config.py (EstimatorConfig, TelemetryPolicy), rover_strategy/world.py, docs/rules_constraints.md.
+rover_strategy/config.py (EstimatorConfig, TelemetryPolicy), rover_strategy/world.py, docs/RULES_AND_CONSTRAINTS.md.
 Context: overhead vision at ~20 Hz with 30-300 ms latency (capture timestamps known), frames dropped, frozen-feed hazard
 (same ts_ms repeated), rover pose noise ~1-3 mm / 1.5 deg, occasional outliers; commands (v,omega) known; motors lag ~0.1s,
 gain asymmetry up to 10%, deadband. Cube positions: static unless pushed; occlusion keeps last value with age growing.

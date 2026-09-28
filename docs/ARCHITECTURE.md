@@ -34,3 +34,19 @@ simulation/  physics (quasi-static pushing, U-shaped rover), sensors (official-f
 8. **Cube orientation**: unknown until inferred from contact depth at capture (flush => heading mod 90) — a belief with
    std, used as worst case over +-2 sigma for depot erosion.
 9. **Allocation**: exhaustive (<= 24 orderings x plan choices), makespan + robustness penalties, both rovers must work.
+
+## Target deployment split vs current code (2026-09-28)
+```
+                 plan.py  (global planner / coach)          <- today: coordination/supervisor.py (allocation,
+                /        \                                       push planning, navigation, reservations)
+         plan R10        plan R11
+            |                |
+       rover10/code.py  rover11/code.py                     <- today: rover/fsm.py + control/ + estimation/
+            |                |                                   (run on the PC inside the supervisor tick)
+        C drivers        C drivers  (motors, IMU, IR, sonar)  <- user's existing embedded drivers
+             \-- ESP-NOW --/  (coordination/protocol.py)
+                   ^
+                 VISION (global correction)
+```
+Open design question for Phase 9: how much of the FSM/control loop runs on the ESP32 (latency of vision over Wi-Fi to
+the rover vs PC->rover command latency). Decide from measured latencies, not before.

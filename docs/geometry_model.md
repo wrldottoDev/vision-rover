@@ -48,7 +48,7 @@ belief with std, never as ground truth.
 - Contact distance (flush): 47 + 30 = 77 mm. Capture travel = 173.9 - 77 = ~97 mm.
 - Retreat before turning after a push: >= paddle reach + clearance so the paddles clear the cube (finding H-15).
 
-## Depot (ASSUMED, see rules_constraints.md)
+## Depot (ASSUMED, see RULES_AND_CONSTRAINTS.md)
 100 mm square centred on the published point. Valid cube-centre region for orientation `a` and margin `m`:
 the square eroded by the rotated cube: half-size `50 - 30(|cos a|+|sin a|) - m` -> +-14 mm aligned with m = 6;
 empty at 45 deg with m >= 7.6. Hence final legs into a depot should be axis-aligned.
