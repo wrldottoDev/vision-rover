@@ -12,9 +12,13 @@ REVIEW_MODEL="${REVIEW_MODEL:-gpt-5.6-luna}"
 quota_hit() { grep -qiE "usage limit|rate limit|rate_limit|quota|429|hit your|insufficient|exceeded" "$1"; }
 echo "RUNNING $(date)" > "$STATUS"
 cd "$WT" || exit 1
-for task in $(ls "$QUEUE"/*.md | sort); do
+while true; do
+  task=""
+  for f in $(ls "$QUEUE"/*.md 2>/dev/null | sort); do   # re-scan each time: tasks can be added while running
+    [ -f "$LOG/$(basename "$f" .md).done" ] || { task="$f"; break; }
+  done
+  [ -z "$task" ] && break
   name="$(basename "$task" .md)"
-  [ -f "$LOG/${name}.done" ] && continue
   echo "[$(date)] $LANE start $name" >> "$LOG/runner_$LANE.log"
   before="$(.venv/bin/python -m pytest -q -p no:cacheprovider tests/ 2>&1 | tail -1)"
   codex exec -m "$IMPL_MODEL" -c model_reasoning_effort=high -s workspace-write --skip-git-repo-check -C "$WT" \

@@ -13,7 +13,7 @@ for name, (dx, dy) in {"top-right": (810, 810), "bottom-left": (50, 50), "bottom
             if dep.contains_cube(x, y, 60, None, -42.5):   # inside/overlapping depot: skip
                 continue
             tot += 1
-            ps = pp.plan(CubeEstimate("red", float(x), float(y)), dep, [], 860, 860, max_plans=1, deadline_s=0.3)
+            ps = pp.plan(CubeEstimate("red", float(x), float(y)), dep, [], 860, 860, max_plans=1, deadline_s=float(__import__("os").environ.get("DL", 0.3)))
             if ps:
                 ok += 1; n = len(ps[0].legs); legs[n] = legs.get(n, 0) + 1
     print(name, f"solvable {ok}/{tot} = {ok/tot:.1%}", "legs:", dict(sorted(legs.items())))
