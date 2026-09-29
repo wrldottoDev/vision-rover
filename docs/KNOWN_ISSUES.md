@@ -1,32 +1,39 @@
 # Known issues (keep current; newest first)
 
+_Verified against `main` @ b5d19d4 / 37df87a, 2026-09-29 (Claude Sonnet 5): full suite 280 passed / 7 failed, all 7
+below (B10 scope). Two items below marked FIXED were previously listed here as blocking but were confirmed resolved
+by direct re-run — this file had not been updated after the A01-A06 merges landed._
+
 ## Blocking
-- **Monte Carlo baseline (2026-09-28, official_like seeds 100-111, strict field rule, 600 s):** 1/36 cubes delivered,
-  0 rover-rover collisions, 0 board exits, 3 non-target contacts. Dominant causes: no push plan (strict-rule geometry
-  + cluttered layouts where other cubes block every corridor; no "move the blocker first" reasoning) and stalls.
-  Seed 0 (hand-debugged): 2/3 delivered, both rovers, 0 collisions/exits. Numbers are SIMULATION ONLY and the
-  simulator judge is still being fixed (Gate 10).
-- **No closed-loop delivery yet.** Single-rover: navigation, alignment, capture and first push leg work; failures seen
-  in align timeouts, capture-verification after interrupted capture, and occasional replanning dead ends. Two
-  rovers starting < 45 mm apart still spend long periods in WAIT/yield churn (`tools/debug_run.py 0 official_like`).
-- **Simulator judging defects (Astra Gate 8, FAILED)** — `docs/astra/gate8_report.md`, 24 failing tests in
-  `tests/test_simulation_astra.py`: corner-marker freeze not modelled; "physically_infeasible" class assigned from the
-  planner's own conservative checks (hides planner failures); success ignores both-rover participation; completion
-  declared before rovers stop/settle; plus physics/sensor gaps. Monte Carlo numbers are NOT trustworthy until fixed.
+- **Monte Carlo baseline is stale, not currently blocking-wrong, just unmeasured.** The 2026-09-28 seeds 100-111
+  numbers (1/36 cubes) predate the A01-A06 simulator merges, the B07+B08 push-planner fix, the C02 arc primitives and
+  the B09 board-guard fix — i.e. predate most of what actually matters. Do not quote those numbers anymore. A fresh
+  re-baseline is queued behind A07 (see HANDOFF next steps); until then, "no closed-loop delivery yet" /
+  "planner_no_solution under clutter" / "WAIT/yield churn under 45 mm starts" should be treated as *last confirmed*
+  2026-09-28, not necessarily current.
 - **Navigation planning is slow** (~0.3-1.5 s per query, dominates simulation time) — Python hull/SAT in hot loop.
+  Lane C task C06 (queued/running) targets >= 2x via collision-check-only changes, search kept bit-identical.
+
+## Fixed (kept here for traceability; do not re-litigate)
+- **Simulator judging defects (Astra Gate 8)** — `docs/astra/gate8_report.md` listed 24 failing tests in
+  `tests/test_simulation_astra.py`. Re-run 2026-09-29: **38/38 passing.** Fixed by the A01-A06 lane-A merges
+  (corner-marker freeze modelling, planner-reason-based classification instead of "physically_infeasible", both-rover
+  participation, settled completion, contact/friction physics, occlusion union, etc.). Some Gate 8 findings (e.g.
+  scenario coverage stratification, item 13) may still be partially open — re-check against the report if you touch
+  `simulation/scenarios.py`.
+- **Edge-parallel pre-push poses unreachable** (no arc primitives): fixed by C02 (`f6d9526`, arc motion primitives).
+  `tests/test_navigation_astra.py`: 54/54 passing 2026-09-29 (was: 1 failure, FSM goal-tolerance-vs-align near edges).
+- **Board exit (seed 107, 20 mm overhang)**: fixed at the root by `e653bf8` (supervisor board guard). See HANDOFF.
 
 ## Important
-- **Edge-parallel pre-push poses are unreachable** (no arc primitives in navigation): corner-depot deliveries along
-  edges currently fail at the last leg ("deadline exceeded" in nav). Lane C (Luna) is adding arcs.
 - DEGRADED policy now implemented with ASSUMED thresholds; needs real latency logs to tune.
 - Protocol v2 (USER-REPORTED) not supported; no schema in repo.
 - Marker offset ~24 mm (USER-REPORTED) not yet applied; must confirm whether the deployed vision compensates it.
 - Motor model in the simulator is random asymmetry, not the measured R10/R11 characterisation.
-- Controllers: 8 adversarial failures in `tests/test_controllers_astra.py` (retreat straightness under 15 %
-  asymmetry + latency; push cross-track saturation under 15 % asymmetry; lost-cube boundary) — root causes in
-  `docs/astra/gate6_report.md` and the I2 worker report summarised in HANDOFF.
-- `tests/test_controllers.py` 1 failure after the lost-cube latency change (needs re-baselining).
-- `tests/test_navigation_astra.py`: FSM goal-tolerance-vs-align near edges (1 test).
+- **Controllers: 7 adversarial failures**, confirmed still failing 2026-09-29 (`tests/test_controllers_astra.py`:
+  retreat straightness under 15% asymmetry + latency x2, push cross-track under 15% asymmetry with 12mm cube offset
+  x2, lost-cube orientation-dependent channel threshold x2; `tests/test_controllers.py::test_push_lost_cube_flag`
+  x1) — root causes in `docs/astra/gate6_report.md`. This is the exact scope of task B10 (queued/running).
 - Supervisor plans synchronously inside `tick()`; fine in simulation, must be threaded for real time.
 
 ## Accepted limitations (documented, not bugs)

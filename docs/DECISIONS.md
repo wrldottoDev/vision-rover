@@ -34,7 +34,8 @@ Format: decision — why — evidence — status.
 15. **Per-rover wheel feed-forward** (`config.ROVER_MOTORS`): R11 right command x0.92 (NOT FINAL), R10 x0.99. The
     estimator models the intended twist; feed-forward only compensates the hardware. ACTIVE.
 16. **Arc motion primitives required**: without them edge-parallel pre-push poses are unreachable (coverage 65 % ->
-    5-29 % when reachability is enforced). Delegated to Luna lane C; reachability check kept as an option. IN PROGRESS.
+    5-29 % when reachability is enforced). Implemented by Luna lane C (C02, `f6d9526`); reachability check kept as
+    an option. `tests/test_navigation_astra.py` 54/54 passing. ACTIVE.
 17. **Delivery confirmation uses the nominal orientation** (belief mean, else last flush-push heading) with a 1 mm
     margin; the worst case over the belief is logged as "marginal". Reason: with the ASSUMED 100 mm depot and 100 mm
     rovers along edges, correct placements sit within a few mm of the boundary (seed 0: truth-delivered cubes were
