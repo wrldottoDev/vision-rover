@@ -27,9 +27,13 @@ Claude/Codex quota for the session)._
 delivered** (was 1/36 stale-baseline), 0/12 missions 3/3, 0 rover-rover collisions, 0 cube exits, 0 non-target
 contacts (safety clean). `failure_classes`: coordination_deadlock 8, stall 2, planner_rejected 2. Wall time ~61 min
 for 12 seeds @ 8 workers.
-**20mm overhang**: launched (`--overhang 20`, same seeds/out dir suffix `_overhang20`) but did NOT finish before this
-session ended (background command `b44m1ypjb`, started 2026-09-29 20:57, still running when the session's usage
-limit hit) — next session: check `runs/mc_overhang20_2026-09-29/summary.json`, or re-run if the process was killed.
+**20mm overhang**: `runs/mc_overhang20_2026-09-29/summary.json` (finished after this doc's first draft). Result:
+**9/36 cubes delivered** (vs 7/36 strict) -- a modest improvement, NOT the dramatic jump the coverage-map analysis
+(PROJECT_CONTEXT 1b) would suggest, because `failure_classes` is IDENTICAL in shape to strict: coordination_deadlock
+8/12 (same count), stall 3, planner_rejected 1. Safety clean again (0 collisions/exits/contacts). Wall time ~77 min.
+**Conclusion: the overhang/field-margin rules question, while still open and worth asking organisers, is no longer
+the dominant lever for mission completion post-A07/B10/C06 -- coordination_deadlock is, at both settings.** Fixing
+the allocator/coordination issue below is now higher-value than chasing the overhang answer alone.
 
 **Root-cause dig on seed 100 (coordination_deadlock)** via `tools/debug_run.py 100 official_like 600`: the
 `coordination_deadlock` label is a THRESHOLD on `yield_failed > 3 OR commit_denied > 200` (runner.py:357) and, in
@@ -49,14 +53,13 @@ if not, the message and failure class should say so plainly instead of retrying 
 search needs to route around a cube it already knows is permanently fixed).
 
 ## Immediate next steps (priority order)
-1. Recover/rerun the 20mm-overhang MC leg (see above); compare against strict.
-2. Investigate the "blocked by an already-delivered cube" dead end above — check a few more failing seeds
+1. Investigate the "blocked by an already-delivered cube" dead end above — check a few more failing seeds
    (101,102,104-106,109,111 all coordination_deadlock too) to see how often this specific pattern (vs. pure early
    rover-rover yield contention) is the actual driver, then decide: smarter search around fixed obstacles, or an
    explicit "give up and reassign" path in the allocator/supervisor when a cube has failed N consecutive plans.
    Consider splitting the crude `yield_failed>3` threshold into two distinct failure classes so MC stats don't
    conflate "rovers got in each other's way early" with "a cube become permanently unplannable".
-3. B10 retreat-straightness (2 tests): decide whether to thread real per-rover `ROVER_MOTORS` calibration into the
+2. B10 retreat-straightness (2 tests): decide whether to thread real per-rover `ROVER_MOTORS` calibration into the
    controller (touches lead-owned `rover/fsm.py`) or re-scope the adversarial test. See codex_reviews.md "Open items".
 4. Corner near-misses (few mm; rules question), Organiser questions (below) — they dominate achievable success.
 
