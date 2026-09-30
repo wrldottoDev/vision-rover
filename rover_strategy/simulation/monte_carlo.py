@@ -72,7 +72,7 @@ def aggregate(results: list[dict]) -> dict:
         "max_completion_time": max(times) if times else None,
     }
     for k in SAFETY_KEYS + ("deadlocks", "delivery_undone", "cube_exits", "replans", "recoveries", "estops",
-                            "capture_failures", "collision_duration_s", "non_target_contact_duration_s",
+                            "capture_failures", "rotations_with_cube", "collision_duration_s", "non_target_contact_duration_s",
                             "max_collision_duration_s", "max_non_target_contact_duration_s"):
         vals = [r.get(k, 0) or 0 for r in results]
         agg[k + "_total"] = sum(vals)

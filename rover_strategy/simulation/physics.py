@@ -51,6 +51,10 @@ from ..world import STOP, WheelCommand
 
 Pt = tuple[float, float]
 
+ROTATION_WITH_CUBE_OMEGA_RAD_S = 0.2
+CHANNEL_PLATE_TOLERANCE_MM = 5.0
+MIN_CAUSAL_PUSH_SPEED_MM_S = 5.0
+
 
 def _pts(P) -> list[Pt]:
     return [(float(p[0]), float(p[1])) for p in P]
@@ -438,8 +442,9 @@ class SimCube:
     alpha: float                    # true orientation, full unwrapped angle, radians
     in_play: bool = True
     touched_by: dict = field(default_factory=dict)   # rover_id -> last-touch sim time
-    # Cumulative cube-centre displacement (mm) while each rover was both in
-    # direct contact and assigned this cube.  Touches alone never earn credit.
+    # Cumulative cube-centre displacement (mm) while each rover's front plate
+    # contacts its assigned cube and actual forward speed exceeds 5 mm/s.
+    # Paddle touches, stationary contact and reverse motion never earn credit.
     engaged_displacement: dict = field(default_factory=dict)
 
 
@@ -476,6 +481,8 @@ class PhysicsWorld:
         self._collision_active: set[tuple[int, int]] = set()
         self._contact_active: set[tuple[int, str]] = set()
         self._direct_contact_active: set[tuple[int, str]] = set()
+        self._plate_contact_active: set[tuple[int, str]] = set()
+        self._rotation_cube_active: set[tuple[int, str]] = set()
         self._rover_load: dict[int, int] = {r.id: 0 for r in rovers}
 
     # ------------------------------------------------------------ commands --
@@ -530,6 +537,7 @@ class PhysicsWorld:
                 self._advance_rover(r, h)
             self.t = segment_end
             self._resolve_rover_rover(prev)
+            self._record_rotation_with_cube()
             cube_before = {color: (c.x, c.y) for color, c in self.cubes.items()}
             touched = self._resolve_contacts()
             self._update_contact_records(touched, cube_before)
@@ -653,6 +661,7 @@ class PhysicsWorld:
         colors = sorted(self.cubes)
         sources: dict[str, set[int]] = {color: set() for color in colors}
         direct_contacts: set[tuple[int, str]] = set()
+        plate_contacts: set[tuple[int, str]] = set()
         # Four default Gauss-Seidel iterations are enough for ordinary
         # contact chains; retain a bounded extra pass budget for rotated
         # corners without paying 32 sweeps on every sustained contact.
@@ -673,22 +682,24 @@ class PhysicsWorld:
                         continue
                     cube_poly = cube_polys[color]
                     cube_box = cube_boxes[color]
-                    for part, part_box in parts:
+                    for part_index, (part, part_box) in enumerate(parts):
                         if not _bbox_overlap_cached(part_box, cube_box):
                             continue
                         depth, n, p = _sat_contact(part, cube_poly)
                         if depth is None or depth < 1e-9:
                             continue
-                        desired = 0.5 * (self.rovers[rid].cmd_left + self.rovers[rid].cmd_right)
+                        actual_v = 0.5 * (self.rovers[rid].wl + self.rovers[rid].wr)
                         along = math.cos(self.rovers[rid].theta) * n[0] + math.sin(self.rovers[rid].theta) * n[1]
                         # A rover braking/reversing away from a cube should
                         # not drag it by the residual motor response.  A
                         # stationary rover remains an immovable obstacle.
-                        if abs(desired) >= self.rovers[rid].motor.deadband_mm_s and desired * along < 0.0:
+                        if actual_v * along < 0.0:
                             continue
                         max_depth = max(max_depth, depth)
                         sources[color].add(rid)
                         direct_contacts.add((rid, color))
+                        if part_index == 0 and along > 0.5:
+                            plate_contacts.add((rid, color))
                         self._apply_twist(cube, p, n, depth, separate=True)
                         cube_poly = _square_pts(cube.x, cube.y, side, cube.alpha)
                         cube_box = _bbox(cube_poly)
@@ -751,6 +762,7 @@ class PhysicsWorld:
             for rid in self.rovers
         }
         self._direct_contact_active = direct_contacts
+        self._plate_contact_active = plate_contacts
         return {(rid, color) for color, rids in sources.items() for rid in rids}
 
     # Kept as a narrow compatibility alias for diagnostics that used the old
@@ -767,8 +779,11 @@ class PhysicsWorld:
                 if self.targets.get(rid) != color:
                     self.events.append(Event("non_target_contact", self.t, {"rover": rid, "cube": color}))
                     self.counts["non_target_contact"] += 1
-        for rid, color in self._direct_contact_active:
+        for rid, color in self._plate_contact_active:
             if self.targets.get(rid) != color:
+                continue
+            actual_v = 0.5 * (self.rovers[rid].wl + self.rovers[rid].wr)
+            if actual_v <= MIN_CAUSAL_PUSH_SPEED_MM_S:
                 continue
             before_x, before_y = cube_before[color]
             cube = self.cubes[color]
@@ -778,6 +793,52 @@ class PhysicsWorld:
                     cube.engaged_displacement.get(rid, 0.0) + displacement
                 )
         self._contact_active = touched
+
+    def _cube_in_channel(self, rover: SimRover, cube: SimCube) -> bool:
+        """Return whether a cube is between the paddles and within 5 mm of the plate.
+
+        Coordinates are evaluated in the rover frame.  The lateral test uses all
+        cube vertices, so a rotated cube only qualifies when its complete footprint
+        is inside the physical channel.  ``plate_gap`` is the distance from the
+        plate to the cube's nearest point along +x; a small negative value allows
+        the contact solver's finite penetration tolerance.
+        """
+        c, s = math.cos(rover.theta), math.sin(rover.theta)
+        local = []
+        for px, py in _square_pts(cube.x, cube.y, self.cfg.cube.side, cube.alpha):
+            dx, dy = px - rover.x, py - rover.y
+            local.append((c * dx + s * dy, -s * dx + c * dy))
+        if max(abs(y) for _, y in local) > self.cfg.rover.inner_half_width + 1e-6:
+            return False
+        plate_gap = min(x for x, _ in local) - self.cfg.rover.x_front_plate
+        return (
+            -CHANNEL_PLATE_TOLERANCE_MM - 1e-6 <= plate_gap
+            <= CHANNEL_PLATE_TOLERANCE_MM + 1e-6
+            and max(x for x, _ in local) >= self.cfg.rover.x_front_plate
+        )
+
+    def _record_rotation_with_cube(self) -> None:
+        """Record one edge-triggered event per rover/cube rotation episode.
+
+        This is diagnostic scoring data only.  It deliberately does not stop or
+        fail a run; the judge can inspect how often a rover turned while carrying
+        a cube in its channel.
+        """
+        active: set[tuple[int, str]] = set()
+        for rid, rover in self.rovers.items():
+            omega = (rover.wr - rover.wl) / self.track
+            if abs(omega) <= ROTATION_WITH_CUBE_OMEGA_RAD_S:
+                continue
+            for color, cube in self.cubes.items():
+                if not cube.in_play or not self._cube_in_channel(rover, cube):
+                    continue
+                pair = (rid, color)
+                active.add(pair)
+                if pair not in self._rotation_cube_active:
+                    self.events.append(Event("rotation_with_cube", self.t,
+                                             {"rover": rid, "cube": color, "omega": omega}))
+                    self.counts["rotations_with_cube"] += 1
+        self._rotation_cube_active = active
 
     # ------------------------------------------------------------- bounds --
     def _check_board_bounds(self) -> None:
