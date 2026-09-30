@@ -323,7 +323,10 @@ def test_push_lost_cube_flag():
     pc.reset((0.0, 0.0), (400.0, 0.0))
     est = RoverEstimate(id=0, pose=Pose(100.0, 0.0, 0.0), v=50.0, omega=0.0)
     # Fresh vision shows the cube far off to the side (rover-left) -> definitely lost.
-    v, w, done, status = pc.step(est, (100.0, 100.0), 0.05, 0.0)
+    # Loss is a debounced safety transition: one bad frame is not enough to
+    # discard a cube during vision noise, so provide two consecutive readings.
+    pc.step(est, (100.0, 100.0), 0.05, 0.0)
+    v, w, done, status = pc.step(est, (100.0, 100.0), 0.05, 0.02)
     assert status.lost_cube is True
 
     v, w, done, status = pc.step(est, (100.0 + C.contact_distance, 1.0), 0.05, 0.02)

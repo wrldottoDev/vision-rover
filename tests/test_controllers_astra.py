@@ -384,7 +384,8 @@ def test_push_lost_threshold_respects_orientation_dependent_channel(half, lat):
     pc = PushController()
     pc.reset((0, 0), (400, 0))
     assert half + lat > HALF_CHANNEL
-    _, _, _, status = pc.step(estimate(0, 0, 0), (PLATE + half, lat), 0, 0)
+    pc.step(estimate(0, 0, 0), (PLATE + half, lat), 0, 0)
+    _, _, _, status = pc.step(estimate(0, 0, 0), (PLATE + half, lat), 0, DT)
     assert status.lost_cube, f"impossible channel fit (half-width {half:.2f}, offset {lat}) accepted"
 
 
