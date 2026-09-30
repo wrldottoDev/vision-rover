@@ -427,8 +427,10 @@ class SimRover:
     y: float
     theta: float
     motor: MotorParams
-    wl: float = 0.0                # actual (lagged) wheel speeds, mm/s
+    wl: float = 0.0                # lag-filtered TARGET wheel speeds (pre-noise), mm/s
     wr: float = 0.0
+    wl_realized: float = 0.0       # REALIZED wheel speeds this step (post multiplicative noise), mm/s --
+    wr_realized: float = 0.0       # use these, not wl/wr, for anything judging actual motion (A07).
     cmd_left: float = 0.0          # last applied command target (post-latency)
     cmd_right: float = 0.0
     pending: list = field(default_factory=list)   # [(t_apply, WheelCommand)]
@@ -575,6 +577,7 @@ class PhysicsWorld:
         nl = 1.0 + self.rng.normal(0.0, m.speed_noise_std)
         nr = 1.0 + self.rng.normal(0.0, m.speed_noise_std)
         wl_eff, wr_eff = r.wl * nl, r.wr * nr
+        r.wl_realized, r.wr_realized = wl_eff, wr_eff
         v = (wl_eff + wr_eff) / 2.0
         w = (wr_eff - wl_eff) / self.track
         r.x += v * math.cos(r.theta) * dt
@@ -610,8 +613,8 @@ class PhysicsWorld:
                     self.counts["collision"] += 1
                 a.x, a.y, a.theta = prev[a.id]
                 b.x, b.y, b.theta = prev[b.id]
-                a.wl = a.wr = 0.0
-                b.wl = b.wr = 0.0
+                a.wl = a.wr = a.wl_realized = a.wr_realized = 0.0
+                b.wl = b.wr = b.wl_realized = b.wr_realized = 0.0
         self._collision_active = new_active
 
     # --------------------------------------------------------- cube contact --
@@ -688,7 +691,7 @@ class PhysicsWorld:
                         depth, n, p = _sat_contact(part, cube_poly)
                         if depth is None or depth < 1e-9:
                             continue
-                        actual_v = 0.5 * (self.rovers[rid].wl + self.rovers[rid].wr)
+                        actual_v = 0.5 * (self.rovers[rid].wl_realized + self.rovers[rid].wr_realized)
                         along = math.cos(self.rovers[rid].theta) * n[0] + math.sin(self.rovers[rid].theta) * n[1]
                         # A rover braking/reversing away from a cube should
                         # not drag it by the residual motor response.  A
@@ -782,7 +785,7 @@ class PhysicsWorld:
         for rid, color in self._plate_contact_active:
             if self.targets.get(rid) != color:
                 continue
-            actual_v = 0.5 * (self.rovers[rid].wl + self.rovers[rid].wr)
+            actual_v = 0.5 * (self.rovers[rid].wl_realized + self.rovers[rid].wr_realized)
             if actual_v <= MIN_CAUSAL_PUSH_SPEED_MM_S:
                 continue
             before_x, before_y = cube_before[color]
@@ -826,7 +829,7 @@ class PhysicsWorld:
         """
         active: set[tuple[int, str]] = set()
         for rid, rover in self.rovers.items():
-            omega = (rover.wr - rover.wl) / self.track
+            omega = (rover.wr_realized - rover.wl_realized) / self.track
             if abs(omega) <= ROTATION_WITH_CUBE_OMEGA_RAD_S:
                 continue
             for color, cube in self.cubes.items():

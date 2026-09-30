@@ -39,16 +39,39 @@ def test_rotation_with_cube_is_edge_triggered_and_not_a_hard_failure():
     assert result.outcome == "success"
 
 
+def test_rotation_with_cube_uses_noisy_realized_speeds_not_pre_noise_lagged_ones():
+    """Lead review of A07 (2026-09-29): the rotation-with-cube event and the causal-contact/transport
+    checks originally read `rover.wl/wr` -- the lag-filtered TARGET speed -- while pose integration
+    applies multiplicative noise (`speed_noise_std`) on top to get the truly REALIZED speed. A rover
+    can sit exactly at the nominal threshold on `wl/wr` while its noisy realized omega is clearly over
+    (or under) it, silently mis-scoring the event. `wl_realized`/`wr_realized` are the fields pose
+    integration actually used this step; the judge must read those, not `wl`/`wr`."""
+    rover = SimRover(10, 200.0, 200.0, 0.0, motor())
+    cube = SimCube("red", rover.x + C.rover.x_front_plate + C.cube.half, rover.y, 0.0)
+    world = PhysicsWorld(C, [rover], [cube], ContactParams(), np.random.default_rng(0))
+    # Pre-noise (commanded/lagged) omega sits exactly AT the threshold -> would not have fired the old
+    # wl/wr-based check (strict `>`). The realized (noisy) speeds push it clearly over.
+    track = C.rover.track_width
+    nominal_omega = 0.2
+    rover.wl, rover.wr = -nominal_omega * track / 2, nominal_omega * track / 2
+    rover.wl_realized, rover.wr_realized = -0.3 * track / 2, 0.3 * track / 2
+    world._record_rotation_with_cube()
+    assert world.counts["rotations_with_cube"] == 1, (
+        "rotation-with-cube must be judged from the REALIZED (noisy) wheel speeds, not the pre-noise "
+        "lagged target -- a rover at the nominal threshold with excess realized omega must still count")
+
+
 def test_contact_rejection_uses_actual_forward_velocity():
     rover = SimRover(10, 200.0, 200.0, 0.0, motor())
     cube = SimCube("red", rover.x + C.rover.x_front_plate + C.cube.half - 1.0, rover.y, 0.0)
     world = PhysicsWorld(C, [rover], [cube], ContactParams(), np.random.default_rng(0))
     world.set_target(10, "red")
 
-    # The command is reversing, but the lagged wheels are still driving forward:
-    # a commanded-direction gate would incorrectly reject this causal contact.
+    # The command is reversing, but the realized (post-lag, post-noise) wheels
+    # are still driving forward: a commanded-direction gate would incorrectly
+    # reject this causal contact.
     rover.cmd_left = rover.cmd_right = -40.0
-    rover.wl = rover.wr = 40.0
+    rover.wl = rover.wr = rover.wl_realized = rover.wr_realized = 40.0
     before = cube.x
     world._resolve_contacts()
     assert cube.x > before
@@ -57,7 +80,7 @@ def test_contact_rejection_uses_actual_forward_velocity():
     # still reversing away from the plate.
     cube.x = before
     rover.cmd_left = rover.cmd_right = 40.0
-    rover.wl = rover.wr = -40.0
+    rover.wl = rover.wr = rover.wl_realized = rover.wr_realized = -40.0
     world._resolve_contacts()
     assert cube.x == pytest.approx(before)
 
@@ -72,7 +95,7 @@ def test_transport_credit_requires_plate_contact_and_actual_forward_speed():
     world = PhysicsWorld(C, [rover], [plate_cube, paddle_cube], ContactParams(), np.random.default_rng(0))
     world.set_target(10, "red")
     rover.cmd_left = rover.cmd_right = 0.0
-    rover.wl = rover.wr = 40.0
+    rover.wl = rover.wr = rover.wl_realized = rover.wr_realized = 40.0
     before = {color: world.cube_pose(color)[:2] for color in world.cubes}
     touched = world._resolve_contacts()
     world._update_contact_records(touched, before)
@@ -83,7 +106,7 @@ def test_transport_credit_requires_plate_contact_and_actual_forward_speed():
     slow_cube = SimCube("red", slow_rover.x + C.rover.x_front_plate + C.cube.half - 1.0, slow_rover.y, 0.0)
     slow_world = PhysicsWorld(C, [slow_rover], [slow_cube], ContactParams(), np.random.default_rng(0))
     slow_world.set_target(10, "red")
-    slow_rover.wl = slow_rover.wr = 5.0
+    slow_rover.wl = slow_rover.wr = slow_rover.wl_realized = slow_rover.wr_realized = 5.0
     before = {"red": slow_world.cube_pose("red")[:2]}
     touched = slow_world._resolve_contacts()
     slow_world._update_contact_records(touched, before)
