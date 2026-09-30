@@ -79,15 +79,14 @@ class NavParams:
                                                 # inside which AlignController refuses to rotate at all.
 
     # -- push (PushController) --------------------------------------------------------------------
-    push_wn: float = 1.5             # TUNED: gentler than nav (2.0) -- the omega SATURATION (push_curv_max)
-                                      # is what actually enforces "no sharp turn", not a weak wn; too small a
-                                      # wn only pushes more of the L/R-asymmetry disturbance rejection onto a
-                                      # larger steady-state cross-track offset (k_y = wn^2/v), for no benefit.
+    push_wn: float = 2.5             # TUNED: reject wheel bias without exceeding push_curv_max.
     push_zeta: float = 1.3          # slightly overdamped: prioritise "no sharp turn" over settling speed.
     push_hdot_gain: float = 0.5     # TUNED: extra damping on the (EKF-supplied) heading rate est.omega.
     push_ydot_gain: float = 0.006   # TUNED: extra damping on the analytic cross-track rate (s/mm... see step()).
-    push_cross_deadband: float = 3.0   # mm. Sub-slack deadband so paddle slack doesn't cause chatter.
+    push_cross_deadband: float = 1.0   # mm. Small slack deadband; heading integral handles steady bias.
     push_curv_max: float = 1.0 / 400.0  # 1/mm. Curvature limit: see PushController docstring.
+    push_heading_ki: float = 0.8       # 1/s. Integral heading correction for persistent wheel gain bias.
+    push_heading_i_limit: float = 0.35 # rad*s. Bound the disturbance-rejection state.
     push_curv_wheel_gain_min: float = 0.85  # ASSUMED: worst-case per-wheel low-speed gain asymmetry (matches
                                               # gate6's demo model) used to derate the commanded omega so the
                                               # PHYSICAL curvature -- not just the commanded omega/v ratio --
@@ -98,10 +97,18 @@ class NavParams:
                                      # tau is exactly v*tau, so this should track the real motor tau).
                                      # Shared by CaptureController/PushController/RetreatController.
     stop_tol_mm: float = 1.0        # mm: trigger the stop this early relative to a perfect prediction.
+    retreat_heading_ki: float = 1.0  # 1/s. Integral heading correction for persistent wheel gain bias.
+    retreat_heading_i_limit: float = 0.4  # rad*s. Bound the retreat disturbance-rejection state.
+    retreat_heading_kp: float = 2.5  # 1/s. Lower than the nav line gain to avoid delayed-noise kicks.
+    retreat_cross_gain: float = 0.0  # 1/(s*mm). Heading hold is safer than chasing delayed lateral noise.
+    retreat_heading_kd: float = 0.6  # s. Damping on measured yaw rate; filtered before use.
+    retreat_heading_d_tau: float = 0.08  # s. Yaw-rate low-pass time constant.
+    retreat_slow_zone: float = 45.0  # mm remaining; reduce speed before the delayed stop trigger.
+    retreat_terminal_speed: float = 28.0  # mm/s, above the wheel deadband for a controlled stop.
     push_cube_filter_alpha: float = 0.5  # TUNED: EMA weight applied to each FRESH cube observation's
                                           # rover-frame (depth, lateral) offset -- replaces blending every
                                           # reading toward a fictitious fixed 77 mm attachment point.
-    push_lost_tol: float = 3.0      # mm. ASSUMED: slack on the lateral/channel-fit bound of the
+    push_lost_tol: float = 2.0      # mm. ASSUMED: slack on the lateral/channel-fit bound of the
                                      # orientation-aware lost-cube geometry check (PushController._lost_cube).
     push_lost_depth_tol: float = 12.0  # mm. ASSUMED: wider slack on the plausible-touching-depth range --
                                        # depth combines TWO independent noisy position reads (rover + cube)
@@ -634,6 +641,8 @@ class PushController:
 
     def reset(self, p0: tuple[float, float], p1: tuple[float, float]) -> None:
         self._lost_count = 0
+        self._heading_integral = 0.0
+        self._last_t: float | None = None
         self.line = _Line.through(p0, p1, reverse=False)
         self._length = math.hypot(p1[0] - p0[0], p1[1] - p0[1])
         self._cube_local = None
@@ -676,9 +685,9 @@ class PushController:
             return False
         pose = est.pose
         along_local, lat_local = pose.to_local(cube_xy[0], cube_xy[1])
-        # (lead, closed loop) the observation is older than the (predicted) pose: while pushing, the cube moved
-        # with the rover by ~v*age.  Compensate, otherwise a moving push reads the cube "inside" the plate.
-        along_local += est.v * getattr(self, "_obs_age", 0.0)
+        # Pose and cube readings are capture-aligned.  Do not extrapolate this
+        # local contact geometry by the network age: during an approach that
+        # turns a harmless gap into a fictitious diagonal cube.
         depth = along_local - self.cfg.rover.x_front_plate
         cube = self.cfg.cube
         tol = self.params.push_lost_tol
@@ -711,6 +720,7 @@ class PushController:
         self._status = PushStatus(cube_along, cube_cross, e_h, lost, cube_stale=not fresh)
 
         if not fresh:
+            self._last_t = t
             return 0.0, 0.0, False, self._status
 
         along_now = cube_along + est.v * est.age_s
@@ -732,24 +742,40 @@ class PushController:
         e_h_dot = est.omega
         e_y_dot = est.v * math.sin(e_h) + self.cfg.contact_distance * est.omega * math.cos(e_h)
         k_h, k_y = line_gains(v, self.params.push_wn, self.params.push_zeta, self.params.line_v_gain_floor)
-        omega = -(k_h * e_h + self.params.push_hdot_gain * e_h_dot) \
-                - (k_y * e_y_eff + self.params.push_ydot_gain * e_y_dot)
-
+        omega_base = -(k_h * e_h + self.params.push_hdot_gain * e_h_dot) \
+                     - (k_y * e_y_eff + self.params.push_ydot_gain * e_y_dot)
         nominal_cap = min(self.cfg.limits.w_fine, self.params.push_curv_max * max(v, 1.0))
         if abs(est.v) > 1.0:
-            # Real (EKF) feedback is available -- trust the ACTUAL observed omega/v over a blind
-            # worst-case assumption, only tightening the cap when it already shows excess curvature.
+            # KNOWN GAP (lead review of B10, 2026-09-29): the nominal (commanded omega/v) cap is used
+            # here, tightened only REACTIVELY once feedback already shows excess -- one control tick of
+            # lag. Forcing the conservative _physical_omega_cap() unconditionally (as in the `else`
+            # branch below) is MORE correct but regresses push-line-tracking and retreat-straightness
+            # tests (verified: causes paddle penetration / lateral drift) because the cap/gain tuning
+            # below assumes reactive-only tightening during cruise. Needs a coupled cap+gain retune, not
+            # a one-line change; tracked as a follow-up task, not fixed blind. See docs/reviews/codex_reviews.md.
             omega_cap = nominal_cap
             observed_ratio = abs(est.omega) / abs(est.v)
             if observed_ratio > self.params.push_curv_max:
                 omega_cap = min(omega_cap, omega_cap * (self.params.push_curv_max / observed_ratio))
         else:
-            # No feedback yet (e.g. the very first command): fall back to a conservative assumed
-            # worst-case per-wheel gain so the PHYSICAL curvature -- not just the commanded ratio --
-            # respects push_curv_max even before any real asymmetry has been observed.
+            # Before the first moving feedback, use the conservative physical
+            # cap so the initial command is safe under the known worst-case
+            # wheel gain asymmetry.
             phys_cap = _physical_omega_cap(v, self.cfg.rover.track_width, self.params.push_curv_max,
                                             self.params.push_curv_wheel_gain_min)
             omega_cap = min(nominal_cap, phys_cap)
+
+        dt = 1.0 / 30.0 if self._last_t is None else max(min(t - self._last_t, 0.25), 1e-6)
+        self._last_t = t
+        candidate = max(-self.params.push_heading_i_limit,
+                        min(self.params.push_heading_i_limit,
+                            self._heading_integral + e_h * dt))
+        omega_candidate = omega_base - self.params.push_heading_ki * candidate
+        pushing_saturated = ((omega_candidate < -omega_cap and e_h > 0.0)
+                             or (omega_candidate > omega_cap and e_h < 0.0))
+        if not pushing_saturated:
+            self._heading_integral = candidate
+        omega = omega_base - self.params.push_heading_ki * self._heading_integral
         omega = max(-omega_cap, min(omega_cap, omega))
         return v, omega, False, self._status
 
@@ -772,6 +798,11 @@ class RetreatController:
     def reset(self, distance_mm: float) -> None:
         self._distance = distance_mm
         self._armed = False
+        self._heading_integral = 0.0
+        self._last_t: float | None = None
+        self._last_along: float | None = None
+        self._progress_rate = 0.0
+        self._omega_d_filt = 0.0
 
     def step(self, est: RoverEstimate, t: float) -> tuple[float, float, bool]:
         pose = est.pose
@@ -782,17 +813,48 @@ class RetreatController:
             self._armed = True
 
         along, cross, e_h = self._line.errors(pose)
+        dt = 1.0 / 30.0 if self._last_t is None else max(min(t - self._last_t, 0.25), 1e-6)
+        if self._last_along is not None:
+            observed_rate = max(0.0, (along - self._last_along) / dt)
+            # The delayed position stream is a better estimate of recent
+            # progress than a single delayed velocity sample.  Low-pass it so
+            # pose noise cannot chatter the terminal stop decision.
+            alpha = dt / (0.12 + dt)
+            self._progress_rate += alpha * (observed_rate - self._progress_rate)
+        self._last_t = t
+        self._last_along = along
+        d_alpha = dt / (self.params.retreat_heading_d_tau + dt)
+        self._omega_d_filt += d_alpha * (est.omega - self._omega_d_filt)
         # "along" already measures progress in the actual direction of travel (see the reverse=True
         # line above), so its rate is |est.v| regardless of the sign convention used for v elsewhere.
         speed = abs(est.v)
-        along_now = along + speed * est.age_s
+        progress_rate = (min(self._progress_rate, speed)
+                         if self._last_along is not None and self._progress_rate > 1.0
+                         else speed)
+        along_now = along + progress_rate * est.age_s
         remaining = self._distance - along_now
-        predicted_stop = along_now + speed * self.params.stop_lag_s
+        predicted_stop = along_now + progress_rate * self.params.stop_lag_s
         if predicted_stop >= self._distance - self.params.stop_tol_mm:
             return 0.0, 0.0, True
         v_cap = self.cfg.limits.v_retreat
+        if remaining <= self.params.retreat_slow_zone:
+            v_cap = min(v_cap, self.params.retreat_terminal_speed)
         v_mag = max(self.params.v_min_moving,
                     min(_decel_speed(remaining, self.params.accel, v_cap),
                         _decel_speed(max(along, 0.0), self.params.accel, v_cap)))
-        omega = self._line.omega(e_h, cross, v_mag)
+        omega_base = max(-self.cfg.limits.w_fine,
+                         min(self.cfg.limits.w_fine,
+                             -self.params.retreat_heading_kp * e_h
+                             - self.params.retreat_cross_gain * cross
+                             - self.params.retreat_heading_kd * self._omega_d_filt))
+        candidate = max(-self.params.retreat_heading_i_limit,
+                        min(self.params.retreat_heading_i_limit,
+                            self._heading_integral + e_h * dt))
+        omega_candidate = omega_base - self.params.retreat_heading_ki * candidate
+        cap = self.cfg.limits.w_fine
+        pushing_saturated = ((omega_candidate < -cap and e_h > 0.0)
+                             or (omega_candidate > cap and e_h < 0.0))
+        if not pushing_saturated:
+            self._heading_integral = candidate
+        omega = max(-cap, min(cap, omega_base - self.params.retreat_heading_ki * self._heading_integral))
         return -v_mag, omega, False
