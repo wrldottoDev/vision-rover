@@ -87,10 +87,6 @@ class NavParams:
     push_curv_max: float = 1.0 / 400.0  # 1/mm. Curvature limit: see PushController docstring.
     push_heading_ki: float = 0.8       # 1/s. Integral heading correction for persistent wheel gain bias.
     push_heading_i_limit: float = 0.35 # rad*s. Bound the disturbance-rejection state.
-    # Static, calibrated left-slower/right-faster feed-forward for retreat.
-    # This is bounded model compensation, not an online estimate; zero it for
-    # an uncalibrated rover and let the integral term trim the residual.
-    retreat_wheel_bias_feedforward: float = 0.08  # dimensionless signed gain mismatch.
     push_curv_wheel_gain_min: float = 0.85  # ASSUMED: worst-case per-wheel low-speed gain asymmetry (matches
                                               # gate6's demo model) used to derate the commanded omega so the
                                               # PHYSICAL curvature -- not just the commanded omega/v ratio --
@@ -750,9 +746,13 @@ class PushController:
                      - (k_y * e_y_eff + self.params.push_ydot_gain * e_y_dot)
         nominal_cap = min(self.cfg.limits.w_fine, self.params.push_curv_max * max(v, 1.0))
         if abs(est.v) > 1.0:
-            # The nominal curvature cap remains active throughout the push.
-            # Feedback can tighten it after a realised excess, but cannot
-            # authorize a larger command or an adaptive bias estimate.
+            # KNOWN GAP (lead review of B10, 2026-09-29): the nominal (commanded omega/v) cap is used
+            # here, tightened only REACTIVELY once feedback already shows excess -- one control tick of
+            # lag. Forcing the conservative _physical_omega_cap() unconditionally (as in the `else`
+            # branch below) is MORE correct but regresses push-line-tracking and retreat-straightness
+            # tests (verified: causes paddle penetration / lateral drift) because the cap/gain tuning
+            # below assumes reactive-only tightening during cruise. Needs a coupled cap+gain retune, not
+            # a one-line change; tracked as a follow-up task, not fixed blind. See docs/reviews/codex_reviews.md.
             omega_cap = nominal_cap
             observed_ratio = abs(est.omega) / abs(est.v)
             if observed_ratio > self.params.push_curv_max:
@@ -806,7 +806,6 @@ class RetreatController:
 
     def step(self, est: RoverEstimate, t: float) -> tuple[float, float, bool]:
         pose = est.pose
-        has_history = self._last_t is not None
         if not self._armed:
             # `_Line.path_dir` is the geometric direction of TRAVEL, not the nose heading -- since we
             # drive backward, travel direction is the reverse of the heading being held.
@@ -847,10 +846,7 @@ class RetreatController:
                          min(self.cfg.limits.w_fine,
                              -self.params.retreat_heading_kp * e_h
                              - self.params.retreat_cross_gain * cross
-                             - self.params.retreat_heading_kd * self._omega_d_filt
-                             - (2.0 * (-v_mag) * self.params.retreat_wheel_bias_feedforward
-                                if has_history else 0.0)
-                             / self.cfg.rover.track_width))
+                             - self.params.retreat_heading_kd * self._omega_d_filt))
         candidate = max(-self.params.retreat_heading_i_limit,
                         min(self.params.retreat_heading_i_limit,
                             self._heading_integral + e_h * dt))
