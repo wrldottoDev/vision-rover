@@ -326,20 +326,49 @@ def _poly_axes(P: list[tuple[float, float]]) -> list[tuple[float, float]]:
 
 
 def _fast_overlap(A: list[tuple[float, float]], B: list[tuple[float, float]], pad: float = 0.0,
-                   axes_b: list[tuple[float, float]] | None = None) -> bool:
+                   axes_b: list[tuple[float, float]] | None = None,
+                   axes_a: list[tuple[float, float]] | None = None,
+                   ranges_b: list[tuple[float, float]] | None = None) -> bool:
     """True if convex A, B are within `pad` of touching (pad=0 -> plain SAT overlap). `axes_b`, when
     given, is B's precomputed edge-normal axes (obstacles are static within a `plan()` call -- no need
     to re-derive and re-normalise the same normals on every one of the ~1e4-1e5 hot-loop checks)."""
-    axes = _poly_axes(A) + (list(axes_b) if axes_b is not None else _poly_axes(B))
-    for nx, ny in axes:
+    axes_a = axes_a if axes_a is not None else _poly_axes(A)
+    axes_b = axes_b if axes_b is not None else _poly_axes(B)
+    for nx, ny in axes_a:
         amin = amax = A[0][0] * nx + A[0][1] * ny
         for (px, py) in A[1:]:
             d = px * nx + py * ny
-            amin, amax = min(amin, d), max(amax, d)
+            if d < amin:
+                amin = d
+            elif d > amax:
+                amax = d
         bmin = bmax = B[0][0] * nx + B[0][1] * ny
         for (px, py) in B[1:]:
             d = px * nx + py * ny
-            bmin, bmax = min(bmin, d), max(bmax, d)
+            if d < bmin:
+                bmin = d
+            elif d > bmax:
+                bmax = d
+        if amax < bmin - pad or bmax < amin - pad:
+            return False
+    for axis_index, (nx, ny) in enumerate(axes_b):
+        amin = amax = A[0][0] * nx + A[0][1] * ny
+        for (px, py) in A[1:]:
+            d = px * nx + py * ny
+            if d < amin:
+                amin = d
+            elif d > amax:
+                amax = d
+        if ranges_b is not None:
+            bmin, bmax = ranges_b[axis_index]
+        else:
+            bmin = bmax = B[0][0] * nx + B[0][1] * ny
+            for (px, py) in B[1:]:
+                d = px * nx + py * ny
+                if d < bmin:
+                    bmin = d
+                elif d > bmax:
+                    bmax = d
         if amax < bmin - pad or bmax < amin - pad:
             return False
     return True
@@ -375,22 +404,117 @@ def _fast_hull(pts: list[tuple[float, float]]) -> list[tuple[float, float]]:
 class _FastCache:
     """Pure-python per-heading rotated envelope cache (see module note above)."""
 
-    def __init__(self, fp: Footprint):
+    def __init__(self, fp: Footprint, enabled: bool = True):
         self._local = [(float(p[0]), float(p[1])) for p in fp.local_envelope()]
         self.sweep_radius = max(math.hypot(lx, ly) for lx, ly in self._local)
+        self.enabled = enabled
         self._cache: dict[float, list[tuple[float, float]]] = {}
+        self._bounds: dict[float, tuple[float, float, float, float]] = {}
+        self._heading_axes: dict[float, list[tuple[float, float]]] = {}
+        self._sweeps: dict[tuple, list[tuple[float, float]]] = {}
+        self._sweep_axes: dict[tuple, list[tuple[float, float]]] = {}
+
+    def _rotated(self, th: float) -> list[tuple[float, float]]:
+        if self.enabled:
+            rot = self._cache.get(th)
+            if rot is not None:
+                return rot
+        c, s = math.cos(th), math.sin(th)
+        rot = [(c * lx - s * ly, s * lx + c * ly) for lx, ly in self._local]
+        if self.enabled:
+            self._cache[th] = rot
+        return rot
 
     def poly(self, x: float, y: float, th: float) -> list[tuple[float, float]]:
         # Exact float key: a rounded/quantized key can silently share one rotated polygon between two
         # headings that are actually distinct (e.g. 0 and 4e-6 rad), hiding a real sub-mm-scale contact
         # (gate 5 finding 9). Lattice headings repeat via identical arithmetic, so this still caches well.
-        key = th
-        rot = self._cache.get(key)
-        if rot is None:
-            c, s = math.cos(th), math.sin(th)
-            rot = [(c * lx - s * ly, s * lx + c * ly) for lx, ly in self._local]
-            self._cache[key] = rot
+        rot = self._rotated(th)
         return [(px + x, py + y) for px, py in rot]
+
+    def axes(self, th: float) -> list[tuple[float, float]]:
+        axes = self._heading_axes.get(th) if self.enabled else None
+        if axes is None:
+            c, s = math.cos(th), math.sin(th)
+            axes = [(c * nx - s * ny, s * nx + c * ny) for nx, ny in _poly_axes(self._local)]
+            if self.enabled:
+                self._heading_axes[th] = axes
+        return axes
+
+    def bounds(self, x: float, y: float, th: float) -> tuple[float, float, float, float]:
+        """Axis-aligned bounds of the translated envelope, cached with its rotation."""
+        if self.enabled:
+            local = self._bounds.get(th)
+            if local is None:
+                rot = self._rotated(th)
+                xs = [p[0] for p in rot]
+                ys = [p[1] for p in rot]
+                local = (min(xs), max(xs), min(ys), max(ys))
+                self._bounds[th] = local
+        else:
+            rot = self._rotated(th)
+            xs = [p[0] for p in rot]
+            ys = [p[1] for p in rot]
+            local = (min(xs), max(xs), min(ys), max(ys))
+        return local[0] + x, local[1] + x, local[2] + y, local[3] + y
+
+    def _sweep_key(self, kind: str, start: Pose, end: Pose, curvature: float,
+                   reverse: bool, arc_distance: float | None) -> tuple:
+        if kind == "rotate":
+            return kind, angle_diff(end.theta, start.theta)
+        if kind == "straight":
+            dx, dy = end.x - start.x, end.y - start.y
+            return kind, dx * math.cos(start.theta) + dy * math.sin(start.theta)
+        distance = math.hypot(end.x - start.x, end.y - start.y) if arc_distance is None else arc_distance
+        return kind, curvature, distance, reverse
+
+    def _sweep_local(self, key: tuple) -> list[tuple[float, float]]:
+        local = self._sweeps.get(key) if self.enabled else None
+        if local is not None:
+            return local
+        kind = key[0]
+        if kind == "rotate":
+            local = _fast_hull(self._rotated(0.0) + self._rotated(key[1]))
+        elif kind == "straight":
+            distance = key[1]
+            shifted = [(x + distance, y) for x, y in self._local]
+            local = _fast_hull(self._local + shifted)
+        else:
+            _, curvature, distance, reverse = key
+            probe = Segment(SegKind.ARC, Pose(0.0, 0.0, 0.0), Pose(0.0, 0.0, 0.0),
+                            reverse=reverse, curvature=curvature)
+            endpoint = _arc_pose(probe, distance)
+            c, s = math.cos(endpoint.theta), math.sin(endpoint.theta)
+            translated = [(endpoint.x + c * lx - s * ly,
+                           endpoint.y + s * lx + c * ly) for lx, ly in self._local]
+            local = _fast_hull(self._local + translated)
+        if self.enabled:
+            self._sweeps[key] = local
+        return local
+
+    def sweep_hull(self, kind: str, start: Pose, end: Pose, curvature: float = 0.0,
+                   reverse: bool = False, arc_distance: float | None = None) -> list[tuple[float, float]]:
+        """Return one interval's endpoint hull, transformed from the rover frame.
+
+        The relative hull depends only on the primitive geometry, not on its world pose.
+        Reusing it avoids sorting the same eight points for every collision check while
+        retaining the exact endpoint-hull sweep used by the public checker.
+        """
+        key = self._sweep_key(kind, start, end, curvature, reverse, arc_distance)
+        local = self._sweep_local(key)
+        c, s = math.cos(start.theta), math.sin(start.theta)
+        return [(start.x + c * lx - s * ly, start.y + s * lx + c * ly) for lx, ly in local]
+
+    def sweep_axes(self, kind: str, start: Pose, end: Pose, curvature: float = 0.0,
+                   reverse: bool = False, arc_distance: float | None = None) -> list[tuple[float, float]]:
+        key = self._sweep_key(kind, start, end, curvature, reverse, arc_distance)
+        axes = self._sweep_axes.get(key) if self.enabled else None
+        if axes is None:
+            axes = _poly_axes(self._sweep_local(key))
+            if self.enabled:
+                self._sweep_axes[key] = axes
+        c, s = math.cos(start.theta), math.sin(start.theta)
+        return [(c * nx - s * ny, s * nx + c * ny) for nx, ny in axes]
 
 
 def _fast_obstacles(obstacles: Sequence[Obstacle]):
@@ -406,7 +530,12 @@ def _fast_obstacles(obstacles: Sequence[Obstacle]):
             cx = sum(p[0] for p in pts) / len(pts)
             cy = sum(p[1] for p in pts) / len(pts)
             rb = max(math.hypot(px - cx, py - cy) for px, py in pts)
-            out.append(("p", pts, cx, cy, rb, _poly_axes(pts)))
+            axes = _poly_axes(pts)
+            ranges = [(min(px * nx + py * ny for px, py in pts),
+                       max(px * nx + py * ny for px, py in pts)) for nx, ny in axes]
+            out.append(("p", pts, cx, cy, rb, axes, 
+                        min(p[0] for p in pts), max(p[0] for p in pts),
+                        min(p[1] for p in pts), max(p[1] for p in pts), ranges))
     return out
 
 
@@ -415,26 +544,47 @@ def _obstacle_far(cx: float, cy: float, reach: float, o, pad: float = 0.0) -> bo
     whose points are within `reach` of (cx, cy). Skips the full disc/SAT test for obstacles nowhere
     near the current sweep -- the common case with many other-rover reservation polygons."""
     ocx, ocy, orb = (o[1], o[2], o[3]) if o[0] == "d" else (o[2], o[3], o[4])
-    return math.hypot(cx - ocx, cy - ocy) > reach + orb + pad
+    dx, dy = cx - ocx, cy - ocy
+    limit = reach + orb + pad
+    return dx * dx + dy * dy > limit * limit
+
+
+def _obstacle_aabb_far(minx: float, maxx: float, miny: float, maxy: float, o, pad: float = 0.0) -> bool:
+    """Return whether an obstacle's AABB misses a conservative sweep AABB."""
+    if o[0] == "d":
+        ominx, omaxx = o[1] - o[3] - pad, o[1] + o[3] + pad
+        ominy, omaxy = o[2] - o[3] - pad, o[2] + o[3] + pad
+    else:
+        ominx, omaxx = o[6] - pad, o[7] + pad
+        ominy, omaxy = o[8] - pad, o[9] + pad
+    return maxx < ominx or omaxx < minx or maxy < ominy or omaxy < miny
+
+
+def _bounds_outside(minx: float, maxx: float, miny: float, maxy: float,
+                    board_w: float, board_h: float, margin: float) -> bool:
+    return minx < margin or maxx > board_w - margin or miny < margin or maxy > board_h - margin
 
 
 def _fast_pose_collides(cache: _FastCache, pose: Pose, obstacles_fast, board_w: float, board_h: float,
                          board_margin: float) -> bool:
+    minx, maxx, miny, maxy = cache.bounds(pose.x, pose.y, pose.theta)
+    if _bounds_outside(minx, maxx, miny, maxy, board_w, board_h, board_margin):
+        return True
+    if all(_obstacle_aabb_far(minx, maxx, miny, maxy, o) for o in obstacles_fast):
+        return False
     poly = cache.poly(pose.x, pose.y, pose.theta)
-    xs = [p[0] for p in poly]
-    ys = [p[1] for p in poly]
-    if min(xs) < board_margin or max(xs) > board_w - board_margin:
-        return True
-    if min(ys) < board_margin or max(ys) > board_h - board_margin:
-        return True
+    axes_a = None
     for o in obstacles_fast:
-        if _obstacle_far(pose.x, pose.y, cache.sweep_radius, o):
+        if _obstacle_aabb_far(minx, maxx, miny, maxy, o):
             continue
         if o[0] == "d":
             if _fast_disc_hit(poly, o[1], o[2], o[3]):
                 return True
-        elif _fast_overlap(poly, o[1], axes_b=o[5]):
-            return True
+        elif o[0] == "p":
+            if axes_a is None:
+                axes_a = cache.axes(pose.theta)
+            if _fast_overlap(poly, o[1], axes_b=o[5], axes_a=axes_a, ranges_b=o[10]):
+                return True
     return False
 
 
@@ -457,26 +607,34 @@ def _fast_segment_collides(cache: _FastCache, seg: Segment, obstacles_fast, boar
                          and cy0 - r_all >= board_margin and cy0 + r_all <= board_h - board_margin):
             return False
         obstacles_fast = near
-        prev = cache.poly(seg.start.x, seg.start.y, seg.start.theta)
+        prev_pose = seg.start
         for k in range(1, n + 1):
             th = wrap(seg.start.theta + step * k)
-            cur = cache.poly(seg.start.x, seg.start.y, th)
-            hull_pts = _fast_hull(prev + cur)
-            xs = [p[0] for p in hull_pts]
-            ys = [p[1] for p in hull_pts]
-            if min(xs) < eff_margin or max(xs) > board_w - eff_margin:
+            pminx, pmaxx, pminy, pmaxy = cache.bounds(prev_pose.x, prev_pose.y, prev_pose.theta)
+            cminx, cmaxx, cminy, cmaxy = cache.bounds(seg.start.x, seg.start.y, th)
+            minx, maxx = min(pminx, cminx), max(pmaxx, cmaxx)
+            miny, maxy = min(pminy, cminy), max(pmaxy, cmaxy)
+            if _bounds_outside(minx, maxx, miny, maxy, board_w, board_h, eff_margin):
                 return True
-            if min(ys) < eff_margin or max(ys) > board_h - eff_margin:
-                return True
+            if all(_obstacle_aabb_far(minx, maxx, miny, maxy, o, pad) for o in obstacles_fast):
+                prev_pose = Pose(seg.start.x, seg.start.y, th)
+                continue
+            cur_pose = Pose(seg.start.x, seg.start.y, th)
+            hull_pts = cache.sweep_hull("rotate", prev_pose, cur_pose)
+            axes_a = None
             for o in obstacles_fast:
-                if _obstacle_far(seg.start.x, seg.start.y, cache.sweep_radius, o, pad):
+                if _obstacle_aabb_far(minx, maxx, miny, maxy, o, pad):
                     continue
                 if o[0] == "d":
                     if _fast_disc_hit(hull_pts, o[1], o[2], o[3], pad):
                         return True
-                elif _fast_overlap(hull_pts, o[1], pad, axes_b=o[5]):
-                    return True
-            prev = cur
+                elif o[0] == "p":
+                    if axes_a is None:
+                        axes_a = cache.sweep_axes("rotate", prev_pose, cur_pose)
+                    if _fast_overlap(hull_pts, o[1], pad, axes_b=o[5], axes_a=axes_a,
+                                     ranges_b=o[10]):
+                        return True
+            prev_pose = cur_pose
         return False
     if seg.kind is SegKind.ARC:
         dtheta = angle_diff(seg.end.theta, seg.start.theta)
@@ -487,48 +645,61 @@ def _fast_segment_collides(cache: _FastCache, seg: Segment, obstacles_fast, boar
         pad = _arc_pad(_arc_sweep_radius(cache, seg), step)
         cx, cy = _arc_center(seg)
         reach = _arc_sweep_radius(cache, seg) + pad
-        if (not obstacles_fast and cx - reach >= board_margin and cx + reach <= board_w - board_margin
+        near = [o for o in obstacles_fast if not _obstacle_far(cx, cy, reach, o)]
+        if (not near and cx - reach >= board_margin and cx + reach <= board_w - board_margin
                 and cy - reach >= board_margin and cy + reach <= board_h - board_margin):
             return False
-        near = [o for o in obstacles_fast if not _obstacle_far(cx, cy, reach, o)]
         prev_pose = seg.start
-        prev = cache.poly(prev_pose.x, prev_pose.y, prev_pose.theta)
         for i in range(1, n + 1):
             cur_pose = _arc_pose(seg, seg.length * i / n)
-            cur = cache.poly(cur_pose.x, cur_pose.y, cur_pose.theta)
-            hull_pts = _fast_hull(prev + cur)
-            xs = [p[0] for p in hull_pts]
-            ys = [p[1] for p in hull_pts]
-            if (min(xs) < board_margin + pad or max(xs) > board_w - board_margin - pad
-                    or min(ys) < board_margin + pad or max(ys) > board_h - board_margin - pad):
+            pminx, pmaxx, pminy, pmaxy = cache.bounds(prev_pose.x, prev_pose.y, prev_pose.theta)
+            cminx, cmaxx, cminy, cmaxy = cache.bounds(cur_pose.x, cur_pose.y, cur_pose.theta)
+            minx, maxx = min(pminx, cminx), max(pmaxx, cmaxx)
+            miny, maxy = min(pminy, cminy), max(pmaxy, cmaxy)
+            if _bounds_outside(minx, maxx, miny, maxy, board_w, board_h, board_margin + pad):
                 return True
+            if all(_obstacle_aabb_far(minx, maxx, miny, maxy, o, pad) for o in near):
+                prev_pose = cur_pose
+                continue
+            hull_pts = cache.sweep_hull("arc", prev_pose, cur_pose, seg.curvature, seg.reverse,
+                                        seg.length / n)
+            axes_a = None
             for o in near:
+                if _obstacle_aabb_far(minx, maxx, miny, maxy, o, pad):
+                    continue
                 if o[0] == "d":
                     if _fast_disc_hit(hull_pts, o[1], o[2], o[3], pad):
                         return True
-                elif _fast_overlap(hull_pts, o[1], pad, axes_b=o[5]):
-                    return True
-            prev = cur
+                elif o[0] == "p":
+                    if axes_a is None:
+                        axes_a = cache.sweep_axes("arc", prev_pose, cur_pose, seg.curvature,
+                                                  seg.reverse, seg.length / n)
+                    if _fast_overlap(hull_pts, o[1], pad, axes_b=o[5], axes_a=axes_a,
+                                     ranges_b=o[10]):
+                        return True
+            prev_pose = cur_pose
         return False
-    a = cache.poly(seg.start.x, seg.start.y, seg.start.theta)
-    b = cache.poly(seg.end.x, seg.end.y, seg.end.theta)
-    poly = _fast_hull(a + b)
-    xs = [p[0] for p in poly]
-    ys = [p[1] for p in poly]
-    if min(xs) < board_margin or max(xs) > board_w - board_margin:
+    start_bounds = cache.bounds(seg.start.x, seg.start.y, seg.start.theta)
+    end_bounds = cache.bounds(seg.end.x, seg.end.y, seg.end.theta)
+    minx, maxx = min(start_bounds[0], end_bounds[0]), max(start_bounds[1], end_bounds[1])
+    miny, maxy = min(start_bounds[2], end_bounds[2]), max(start_bounds[3], end_bounds[3])
+    if _bounds_outside(minx, maxx, miny, maxy, board_w, board_h, board_margin):
         return True
-    if min(ys) < board_margin or max(ys) > board_h - board_margin:
-        return True
-    mx, my = (seg.start.x + seg.end.x) / 2.0, (seg.start.y + seg.end.y) / 2.0
-    reach = cache.sweep_radius + seg.length / 2.0
+    if all(_obstacle_aabb_far(minx, maxx, miny, maxy, o) for o in obstacles_fast):
+        return False
+    poly = cache.sweep_hull("straight", seg.start, seg.end, reverse=seg.reverse)
+    axes_a = None
     for o in obstacles_fast:
-        if _obstacle_far(mx, my, reach, o):
+        if _obstacle_aabb_far(minx, maxx, miny, maxy, o):
             continue
         if o[0] == "d":
             if _fast_disc_hit(poly, o[1], o[2], o[3]):
                 return True
-        elif _fast_overlap(poly, o[1], axes_b=o[5]):
-            return True
+        elif o[0] == "p":
+            if axes_a is None:
+                axes_a = cache.sweep_axes("straight", seg.start, seg.end, reverse=seg.reverse)
+            if _fast_overlap(poly, o[1], axes_b=o[5], axes_a=axes_a, ranges_b=o[10]):
+                return True
     return False
 
 
