@@ -20,14 +20,45 @@ Claude/Codex quota for the session)._
   review could proceed. If re-running lanes concurrently, verify `git log` on each worktree actually advanced past
   the queue commit before trusting `docs/codex_log/*_report.md`.
 
+## MC re-baseline (2026-09-29, official_like seeds 100-111, 600s, post A07/B10/C06 merge)
+**Strict field rule (overhang 0mm)**: `runs/mc_strict_2026-09-29/summary.json` (not committed, gitignored; re-run
+`PYTHONPATH=. .venv/bin/python -m rover_strategy.simulation.monte_carlo --start 100 --n 12 --family official_like
+--max-time 600 --workers 8 --overhang 0 --out runs/mc_strict_2026-09-29` to reproduce). Result: **7/36 cubes
+delivered** (was 1/36 stale-baseline), 0/12 missions 3/3, 0 rover-rover collisions, 0 cube exits, 0 non-target
+contacts (safety clean). `failure_classes`: coordination_deadlock 8, stall 2, planner_rejected 2. Wall time ~61 min
+for 12 seeds @ 8 workers.
+**20mm overhang**: launched (`--overhang 20`, same seeds/out dir suffix `_overhang20`) but did NOT finish before this
+session ended (background command `b44m1ypjb`, started 2026-09-29 20:57, still running when the session's usage
+limit hit) — next session: check `runs/mc_overhang20_2026-09-29/summary.json`, or re-run if the process was killed.
+
+**Root-cause dig on seed 100 (coordination_deadlock)** via `tools/debug_run.py 100 official_like 600`: the
+`coordination_deadlock` label is a THRESHOLD on `yield_failed > 3 OR commit_denied > 200` (runner.py:357) and, in
+this seed, actually fires from EARLY rover-rover yield contention (`yield_failed=9`) — but the run also spends its
+entire second half (t=64.65 to end, 54+s of a 120s partial run) on a SEPARATE, undocumented problem: after rover 10
+delivers green, the allocator repeatedly (~every 6s) fails to plan a push for red with `no_plan: "cube 'red' blocked
+by undelivered cube(s): green"` — except green IS already delivered (confirmed in the same trace at t=64.6). The
+blocker-diagnosis (`push_planner._diagnose_blockers`) doesn't check delivery status, it just asks "would removing
+this cube's obstacle hull unblock a plan?" — true here because the now-DELIVERED green cube's fixed resting position
+in its depot physically blocks red's only corridor. Since a delivered cube must never be re-disturbed
+(delivery_undone stays 0, correctly), this may be a genuine geometry dead end for this seed/layout, OR the search
+just isn't trying enough alternate D-points/corridors around a known-fixed obstacle — undetermined. Symptom either
+way: rover 10 sits IDLE for the rest of the run (no reassignment, no backoff) instead of the allocator recognizing
+red is stuck and either giving up on it (freeing rover 10 to help elsewhere) or trying harder with the *known* fixed
+obstacle in mind. **Not fixed this session** — needs its own investigation (is it geometrically solvable at all?
+if not, the message and failure class should say so plainly instead of retrying every 6s for 600s; if it is, the
+search needs to route around a cube it already knows is permanently fixed).
+
 ## Immediate next steps (priority order)
-1. **Re-baseline MC on the merged simulator** (strict and 20 mm) — now unblocked (A07 judge fixes are in). This
-   session ran a first pass; see results below. Scale to 50 seeds if a bigger sample is wanted.
-2. B10 retreat-straightness (2 tests): decide whether to thread real per-rover `ROVER_MOTORS` calibration into the
+1. Recover/rerun the 20mm-overhang MC leg (see above); compare against strict.
+2. Investigate the "blocked by an already-delivered cube" dead end above — check a few more failing seeds
+   (101,102,104-106,109,111 all coordination_deadlock too) to see how often this specific pattern (vs. pure early
+   rover-rover yield contention) is the actual driver, then decide: smarter search around fixed obstacles, or an
+   explicit "give up and reassign" path in the allocator/supervisor when a cube has failed N consecutive plans.
+   Consider splitting the crude `yield_failed>3` threshold into two distinct failure classes so MC stats don't
+   conflate "rovers got in each other's way early" with "a cube become permanently unplannable".
+3. B10 retreat-straightness (2 tests): decide whether to thread real per-rover `ROVER_MOTORS` calibration into the
    controller (touches lead-owned `rover/fsm.py`) or re-scope the adversarial test. See codex_reviews.md "Open items".
-3. Remaining failure classes: planner_no_solution (strict geometry + clutter: use last_blockers for sequencing),
-   corner near-misses (few mm; rules question), coordination liveness (deadlock in close starts, < 45 mm).
-4. Organiser questions (below) — they dominate achievable success.
+4. Corner near-misses (few mm; rules question), Organiser questions (below) — they dominate achievable success.
 
 ## Open questions for the team / organisers (cannot be resolved from the repo)
 - Official depot size and delivery criterion; depot positions vs corner markers (marker freeze risk).
