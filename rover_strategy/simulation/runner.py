@@ -37,6 +37,7 @@ class RunResult:
     sim_time: float = 0.0
     rover_rover_collisions: int = 0
     non_target_contacts: int = 0
+    rotations_with_cube: int = 0
     rover_exits: int = 0
     falls: int = 0
     cube_exits: int = 0
@@ -256,6 +257,8 @@ def run_scenario(sc: SC.Scenario, cfg: Config = DEFAULT, max_time: float = 300.0
     wc = world.counts
     res.rover_rover_collisions = wc.get("collision", 0)
     res.non_target_contacts = wc.get("non_target_contact", 0)
+    # Diagnostic only: rotations with a cube do not make the run a failure.
+    res.rotations_with_cube = wc.get("rotations_with_cube", 0)
     res.rover_exits = wc.get("rover_exit", 0)
     res.falls = wc.get("rover_fell", 0)
     res.cube_exits = wc.get("cube_exit", 0)

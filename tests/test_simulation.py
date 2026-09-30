@@ -118,7 +118,7 @@ def test_deep_initial_overlap_does_not_explode():
     assert spread < 1.0
 
 
-def test_cube_in_channel_moves_with_rover_and_reversing_leaves_it():
+def test_cube_in_channel_moves_with_rover_and_reversing_uses_actual_velocity():
     rng = np.random.default_rng(0)
     rover = SimRover(id=10, x=0.0, y=100.0, theta=0.0, motor=_still_motor())
     cube = SimCube(color="red", x=C.contact_distance, y=100.0, alpha=0.0)
@@ -135,11 +135,16 @@ def test_cube_in_channel_moves_with_rover_and_reversing_leaves_it():
 
     cube_x_before_reverse = cube.x
     back = WheelCommand(-50.0, -50.0)
+    cube_x_at_actual_stop = None
     for _ in range(500):
         world.set_command(10, back, world.t)
         world.step(dt)
+        if cube_x_at_actual_stop is None and (rover.wl + rover.wr) / 2.0 <= 5.0:
+            cube_x_at_actual_stop = cube.x
     assert rover.x < cube_x_before_reverse - 200.0   # rover backed away substantially
-    assert cube.x == pytest.approx(cube_x_before_reverse, abs=1e-9)  # cube untouched
+    assert cube_x_at_actual_stop is not None
+    assert cube_x_at_actual_stop > cube_x_before_reverse  # residual actual forward speed caused a push
+    assert cube.x == pytest.approx(cube_x_at_actual_stop, abs=1e-9)  # no push after actual speed fell below 5 mm/s
 
 
 # --------------------------------------------------------------------------- #
